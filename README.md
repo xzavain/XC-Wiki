@@ -26,6 +26,18 @@ On first run you'll be sent to a **setup screen** to create the administrator ac
 
 Set `ENCRYPTION_KEY` in production (a 64-char hex string, e.g. from `openssl rand -hex 32`) — it encrypts cloud-backup OAuth tokens at rest. Without it, a dev fallback key is used and a warning is printed.
 
+## Recommended server specs
+
+XC Wiki is a lightweight Node + SQLite app — no separate database or services needed.
+
+| | Minimum | Comfortable |
+|---|---|---|
+| CPU | 1 vCPU | 2 vCPU |
+| RAM | 512 MB | 1 GB |
+| Disk | 5 GB (plus room for uploads/backups) | 20 GB |
+
+Any $4–6/month VPS (Hetzner CX11, DigitalOcean Basic, etc.) runs it fine. Backups to Google Drive/OneDrive don't need extra disk.
+
 ## Deploy with Coolify
 
 Self-host in a few clicks. You need a Coolify instance connected to your server.

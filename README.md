@@ -12,7 +12,7 @@ Stack: **Node 20 + Express + better-sqlite3**, vanilla JS SPA. No build step —
 
 | WYSIWYG editor | Admin dashboard |
 |---|---|
-| ![WYSIWYG editor](https://files.catbox.moe/octzax.jpg) | ![Admin dashboard](https://files.catbox.moe/0bt0mg.jpg) |
+| ![WYSIWYG editor](https://n.uguu.se/bCyrKwEt.jpg) | ![Admin dashboard](https://d.uguu.se/eNLzKsbN.jpg) |
 
 ## Quick start
 

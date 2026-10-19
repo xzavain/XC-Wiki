@@ -8,7 +8,7 @@ Stack: **Node 20 + Express + better-sqlite3**, vanilla JS SPA. No build step —
 
 | Home | Article |
 |---|---|
-| ![XC Wiki home](https://files.catbox.moe/b81v3b.jpg) | ![Article page](https://files.catbox.moe/kofplj.jpg) |
+| ![XC Wiki home](https://files.catbox.moe/b81v3b.jpg) | ![Article page](https://files.catbox.moe/anooq3.jpg) |
 
 | WYSIWYG editor | Admin dashboard |
 |---|---|

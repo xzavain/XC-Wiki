@@ -5,10 +5,16 @@ services:
     build: .
     container_name: xc-wiki
     ports:
-      - "3000:3000"
+      - "${PORT:-3000}:3000"
+    # Copy .env.example to .env, or set the same vars in Coolify's UI.
+    env_file:
+      - .env
     environment:
+      # App always listens on 3000 inside the container; ${PORT} above
+      # controls the host-side port only.
       PORT: 3000
     volumes:
+      # SQLite database + uploads persist here across restarts/upgrades
       - xcwiki-data:/app/data
     restart: unless-stopped
     healthcheck:

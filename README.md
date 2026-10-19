@@ -26,10 +26,23 @@ On first run you'll be sent to a **setup screen** to create the administrator ac
 
 Set `ENCRYPTION_KEY` in production (a 64-char hex string, e.g. from `openssl rand -hex 32`) — it encrypts cloud-backup OAuth tokens at rest. Without it, a dev fallback key is used and a warning is printed.
 
-## Docker / Coolify
+## Deploy with Coolify
 
+Self-host in a few clicks. You need a Coolify instance connected to your server.
+
+**Option A — from this Git repo (recommended)**
+1. In Coolify: **Projects → your project → Add → Service → Docker Compose**, and point it at this repository.
+2. **Environment variables** — add:
+   - `ENCRYPTION_KEY` = output of `openssl rand -hex 32` (required for Cloud Backup; set once, never change it)
+3. **Persistent storage** — the compose file already declares the `xcwiki-data` volume mounted at `/app/data` (SQLite database + uploads). In Coolify's service → **Storages**, confirm a persistent volume is attached at `/app/data`.
+4. Click **Deploy**. The healthcheck hits `/api/settings/public`; Coolify shows the service healthy when it responds.
+5. Open the app URL — the first-run screen creates your admin account. No demo data is seeded.
+
+**Option B — plain Docker Compose**
 ```bash
+cp .env.example .env        # then set ENCRYPTION_KEY inside .env
 docker compose up -d --build
+# open http://localhost:3000
 ```
 
 The SQLite database and uploads live in the `xcwiki-data` volume (`/app/data`). For off-site copies, use the built-in Cloud Backup (Google Drive / OneDrive) instead of only relying on volume snapshots.

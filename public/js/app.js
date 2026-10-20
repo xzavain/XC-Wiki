@@ -1,20 +1,35 @@
 'use strict';
 /* XC Wiki — reader SPA: router, home, article, search, themes, progress. */
 
+/* Storage can be unavailable (private-mode webviews throw on access).
+   Every read/write goes through these helpers so a blocked store can
+   never kill the page. */
+function rawStore() { try { return localStorage; } catch { return null; } }
+function rawSessionStore() { try { return sessionStorage; } catch { return null; } }
+const store = {
+  get(k) { const s = rawStore(); if (!s) return null; try { return s.getItem(k); } catch { return null; } },
+  set(k, v) { const s = rawStore(); if (!s) return; try { s.setItem(k, v); } catch { /* unavailable */ } },
+  remove(k) { const s = rawStore(); if (!s) return; try { s.removeItem(k); } catch { /* unavailable */ } },
+};
+const sessionStore = {
+  get(k) { const s = rawSessionStore(); if (!s) return null; try { return s.getItem(k); } catch { return null; } },
+  set(k, v) { const s = rawSessionStore(); if (!s) return; try { s.setItem(k, v); } catch { /* unavailable */ } },
+};
+
 const App = {
   settings: null,
   user: null,
-  token: localStorage.getItem('xcwiki_token') || '',
-  previewMode: sessionStorage.getItem('xcwiki_preview') === '1',
+  token: store.get('xcwiki_token') || '',
+  previewMode: sessionStore.get('xcwiki_preview') === '1',
   anonKey: null,
 };
 
 function anonKey() {
   if (!App.anonKey) {
-    App.anonKey = localStorage.getItem('xcwiki_anon');
+    App.anonKey = store.get('xcwiki_anon');
     if (!App.anonKey) {
       App.anonKey = 'a' + Math.random().toString(36).slice(2) + Date.now().toString(36);
-      localStorage.setItem('xcwiki_anon', App.anonKey);
+      store.set('xcwiki_anon', App.anonKey);
     }
   }
   return App.anonKey;
@@ -25,7 +40,7 @@ async function api(path, opts = {}) {
   if (App.token) headers['Authorization'] = 'Bearer ' + App.token;
   const res = await fetch(path, { ...opts, headers });
   if (res.status === 401 && App.token) {
-    App.token = ''; localStorage.removeItem('xcwiki_token'); App.user = null;
+    App.token = ''; store.remove('xcwiki_token'); App.user = null;
     renderUserArea();
   }
   let data = null;
@@ -60,7 +75,7 @@ function timeAgo(iso) {
 /* ---------------- theme ---------------- */
 
 function applyTheme() {
-  let pref = localStorage.getItem('xcwiki_theme') || 'system';
+  let pref = store.get('xcwiki_theme') || 'system';
   let effective = pref;
   if (pref === 'system') effective = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
   document.documentElement.setAttribute('data-theme', effective);
@@ -70,12 +85,12 @@ function applyTheme() {
 }
 
 function initTheme() {
-  if (!localStorage.getItem('xcwiki_theme') && App.settings) {
-    localStorage.setItem('xcwiki_theme', App.settings.default_theme === 'light' ? 'light' : 'system');
+  if (!store.get('xcwiki_theme') && App.settings) {
+    store.set('xcwiki_theme', App.settings.default_theme === 'light' ? 'light' : 'system');
   }
   applyTheme();
   document.querySelectorAll('.theme-toggle button').forEach(b => {
-    b.onclick = () => { localStorage.setItem('xcwiki_theme', b.dataset.themeSet); applyTheme(); };
+    b.onclick = () => { store.set('xcwiki_theme', b.dataset.themeSet); applyTheme(); };
   });
   window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', applyTheme);
 }
@@ -137,7 +152,7 @@ function renderUserArea() {
         </div>`);
       document.getElementById('m-logout').onclick = async () => {
         await api('/api/customer/logout', { method: 'POST' }).catch(() => {});
-        App.token = ''; localStorage.removeItem('xcwiki_token'); App.user = null;
+        App.token = ''; store.remove('xcwiki_token'); App.user = null;
         closeModal(); renderUserArea(); location.hash = '#/';
       };
     };
@@ -158,7 +173,7 @@ function renderUserArea() {
       document.getElementById('m-preview').onclick = () => { closeModal(); setPreviewMode(true); };
       document.getElementById('m-logout').onclick = async () => {
         await api('/api/auth/logout', { method: 'POST' }).catch(() => {});
-        App.token = ''; localStorage.removeItem('xcwiki_token'); App.user = null;
+        App.token = ''; store.remove('xcwiki_token'); App.user = null;
         closeModal(); renderUserArea(); location.hash = '#/';
       };
     };
@@ -174,7 +189,7 @@ function renderUserArea() {
 
 function setPreviewMode(on) {
   App.previewMode = on;
-  sessionStorage.setItem('xcwiki_preview', on ? '1' : '0');
+  sessionStore.set('xcwiki_preview', on ? '1' : '0');
   renderUserArea();
   route();
 }
@@ -524,7 +539,7 @@ async function viewSetup() {
     const fd = new FormData(e.target);
     try {
       const d = await api('/api/setup', { method: 'POST', body: JSON.stringify(Object.fromEntries(fd)) });
-      App.token = d.token; localStorage.setItem('xcwiki_token', d.token); App.user = d.user;
+      App.token = d.token; store.set('xcwiki_token', d.token); App.user = d.user;
       renderUserArea(); toast('Admin account created', 'ok'); location.hash = '#/admin';
     } catch (err) { document.getElementById('setup-err').textContent = err.message; }
   };
@@ -546,7 +561,7 @@ function viewLogin() {
     const fd = new FormData(e.target);
     try {
       const d = await api('/api/auth/login', { method: 'POST', body: JSON.stringify(Object.fromEntries(fd)) });
-      App.token = d.token; localStorage.setItem('xcwiki_token', d.token); App.user = d.user;
+      App.token = d.token; store.set('xcwiki_token', d.token); App.user = d.user;
       renderUserArea(); toast('Signed in', 'ok'); location.hash = '#/admin';
     } catch (err) { document.getElementById('login-err').textContent = err.message; }
   };
@@ -569,7 +584,7 @@ function viewCustomerLogin() {
     const fd = new FormData(e.target);
     try {
       const d = await api('/api/customer/login', { method: 'POST', body: JSON.stringify(Object.fromEntries(fd)) });
-      App.token = d.token; localStorage.setItem('xcwiki_token', d.token); App.user = d.user;
+      App.token = d.token; store.set('xcwiki_token', d.token); App.user = d.user;
       renderUserArea(); toast('Signed in', 'ok'); location.hash = '#/';
     } catch (err) { document.getElementById('clogin-err').textContent = err.message; }
   };
@@ -600,7 +615,7 @@ async function viewAccount() {
     </div>`;
   document.getElementById('acc-logout').onclick = async () => {
     await api('/api/customer/logout', { method: 'POST' }).catch(() => {});
-    App.token = ''; localStorage.removeItem('xcwiki_token'); App.user = null;
+    App.token = ''; store.remove('xcwiki_token'); App.user = null;
     renderUserArea(); location.hash = '#/';
   };
   document.getElementById('pw-form').onsubmit = async (e) => {

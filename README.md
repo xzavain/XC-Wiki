@@ -114,7 +114,7 @@ The SQLite database and uploads live in the `xcwiki-data` volume (`/app/data`). 
 
 ### BookStack import
 
-- Admin → BookStack Import: enter the instance URL + API token (used only for the run, never saved), test the connection, then import
+- Admin → BookStack Import: enter the instance URL + API token, test the connection, then import. The connection can be **saved for later imports** — the Token Secret is stored encrypted (AES-256-GCM) and never displayed again; test/import fall back to the saved connection when the fields are left blank, and freshly typed credentials take precedence for that run
 - Books → categories, Pages → articles (chapter kept as a tag, page tags + author carried over, drafts stay drafts, HTML formatting preserved); each book's cover image is downloaded into the Media Library and set as the category's cover
 - Referenced images and page attachments are downloaded into the Media Library and the content is rewritten to the new hosted paths; links between imported pages are rewired to the new articles
 - Progress + completion summary; re-runs are idempotent (skip by default, or update in place) — no duplicates

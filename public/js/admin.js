@@ -1556,8 +1556,9 @@ const AdminView = {
 
   async bookstack(main) {
     main.innerHTML = `<h2 style="margin-top:0">📚 BookStack Import</h2>
-      <p style="color:var(--muted);font-size:.88rem">Import a whole BookStack instance: <strong>Books become categories</strong> and <strong>Pages become articles</strong> with their HTML formatting preserved. Images and attachments referenced by the pages are downloaded into this wiki's Media Library and the content is rewritten to the new hosted paths; links between imported pages are rewired to the new articles. Create an API token in BookStack under <em>your profile → API Tokens</em>. The token is used only for the run and is <strong>never saved</strong>.</p>
+      <p style="color:var(--muted);font-size:.88rem">Import a whole BookStack instance: <strong>Books become categories</strong> and <strong>Pages become articles</strong> with their HTML formatting preserved. Images and attachments referenced by the pages are downloaded into this wiki's Media Library and the content is rewritten to the new hosted paths; links between imported pages are rewired to the new articles. Create an API token in BookStack under <em>your profile → API Tokens</em>. You can <strong>save the connection</strong> so later imports don't need the token re-typed — the Token Secret is stored encrypted and is never shown again. Credentials typed here take precedence over the saved connection for that run.</p>
       <div class="panel">
+        <div id="bs-saved" style="font-size:.88rem;margin-bottom:10px"></div>
         <div class="form-row3">
           <label class="fld"><span>BookStack base URL</span><input id="bs-url" placeholder="https://wiki.example.com"></label>
           <label class="fld"><span>API Token ID</span><input id="bs-tid" autocomplete="off"></label>
@@ -1565,8 +1566,11 @@ const AdminView = {
         </div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <button class="btn ghost small" id="bs-test">Test connection</button>
+          <button class="btn ghost small" id="bs-save">💾 Save connection</button>
+          <button class="btn ghost small danger" id="bs-remove" style="display:none">Remove saved connection</button>
           <span id="bs-test-out" style="font-size:.85rem"></span>
         </div>
+        <small style="color:var(--muted)">With a connection saved, Test and Import work with the fields left blank. Typing a new Token Secret uses it for that run instead; leave it blank when saving to keep the saved secret unchanged.</small>
       </div>
       <div class="panel" style="margin-top:14px"><h3>Import options</h3>
         <div class="form-row3">
@@ -1593,6 +1597,42 @@ const AdminView = {
       token_id: document.getElementById('bs-tid').value,
       token_secret: document.getElementById('bs-tsecret').value,
     });
+    const savedBox = document.getElementById('bs-saved');
+    const paintSaved = (c) => {
+      const removeBtn = document.getElementById('bs-remove');
+      const secretInput = document.getElementById('bs-tsecret');
+      if (c && c.saved) {
+        savedBox.innerHTML = `🔐 <strong>Saved connection:</strong> ${esc(c.base_url)} · Token ID ${esc(c.token_id)} · Secret ${esc(c.secret_masked || '••••')}${c.saved_at ? ` · saved ${esc(String(c.saved_at).slice(0, 10))}` : ''}${c.readable ? '' : ' · <span style="color:var(--amber)">⚠️ saved secret can no longer be decrypted — remove and save again</span>'}`;
+        if (!document.getElementById('bs-url').value) document.getElementById('bs-url').value = c.base_url || '';
+        if (!document.getElementById('bs-tid').value) document.getElementById('bs-tid').value = c.token_id || '';
+        secretInput.placeholder = (c.secret_masked || '••••') + ' — leave blank to keep';
+        removeBtn.style.display = '';
+      } else {
+        savedBox.innerHTML = 'No saved connection yet — enter the details and choose <strong>Save connection</strong> to reuse them for later imports.';
+        secretInput.placeholder = '';
+        removeBtn.style.display = 'none';
+      }
+    };
+    try { paintSaved(await api('/api/admin/bookstack/connection')); } catch { savedBox.textContent = ''; }
+    document.getElementById('bs-save').onclick = async () => {
+      const out = document.getElementById('bs-test-out');
+      try {
+        const c = await api('/api/admin/bookstack/connection', { method: 'PUT', body: JSON.stringify(creds()) });
+        document.getElementById('bs-tsecret').value = '';
+        paintSaved(c);
+        toast('BookStack connection saved', 'ok');
+        out.innerHTML = '✅ Connection saved — later imports can leave the fields blank.';
+      } catch (e) { out.innerHTML = '❌ ' + esc(e.message); }
+    };
+    document.getElementById('bs-remove').onclick = async () => {
+      if (!confirm('Remove the saved BookStack connection? The stored Token Secret will be deleted.')) return;
+      try {
+        const c = await api('/api/admin/bookstack/connection', { method: 'DELETE' });
+        document.getElementById('bs-tsecret').value = '';
+        paintSaved(c);
+        toast('Saved BookStack connection removed', 'ok');
+      } catch (e) { toast('Remove failed: ' + e.message, 'err'); }
+    };
     document.getElementById('bs-test').onclick = async () => {
       const out = document.getElementById('bs-test-out');
       out.textContent = 'Testing…';

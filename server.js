@@ -1377,12 +1377,32 @@ app.post('/api/admin/demo/restore', requireAuth, (req, res) => {
 });
 
 /* ================= BOOKSTACK IMPORT (admin) =================
-   Credentials come from the request body and are used only for the run —
-   they are never written to the database or settings. */
+   The admin may save the connection (URL + Token ID + Secret) for later
+   imports; the secret is stored encrypted (see lib/bookstack.js) and no
+   endpoint ever returns it. Runs use freshly typed credentials when
+   provided, otherwise the saved connection. */
+
+app.get('/api/admin/bookstack/connection', requireAuth, (req, res) => {
+  res.json(bookstack.publicConnection(getDb()));
+});
+
+app.put('/api/admin/bookstack/connection', requireAuth, (req, res) => {
+  try {
+    const view = bookstack.saveConnection(getDb(), req.body || {});
+    logActivity(getDb(), req.user.id, 'bookstack_connection', 'Saved the BookStack API connection');
+    res.json(view);
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.delete('/api/admin/bookstack/connection', requireAuth, (req, res) => {
+  const view = bookstack.removeConnection(getDb());
+  logActivity(getDb(), req.user.id, 'bookstack_connection', 'Removed the saved BookStack API connection');
+  res.json(view);
+});
 
 app.post('/api/admin/bookstack/test', requireAuth, async (req, res) => {
   try {
-    res.json(await bookstack.testConnection(req.body || {}));
+    res.json(await bookstack.testConnection(getDb(), req.body || {}));
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 

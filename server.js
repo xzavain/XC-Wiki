@@ -1415,7 +1415,13 @@ app.post('/api/admin/bookstack/import', requireAuth, (req, res) => {
 
 app.get('/api/admin/bookstack/import/status', requireAuth, (req, res) => {
   const job = bookstack.getImportJob(req.query.id ? String(req.query.id) : null);
-  res.json({ job: job ? bookstack.publicJob(job) : null });
+  // ?since=<log line index> — the response carries only newer log lines
+  res.json({ job: job ? bookstack.publicJob(job, Number(req.query.since) || 0) : null });
+});
+
+/* The last 3 completed import runs, each with its full saved log. */
+app.get('/api/admin/bookstack/import/runs', requireAuth, (req, res) => {
+  res.json({ runs: bookstack.listImportRuns(getDb()) });
 });
 
 /* ================= CLOUD BACKUP (admin) ================= */

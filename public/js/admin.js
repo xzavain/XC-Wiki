@@ -1589,7 +1589,15 @@ const AdminView = {
           <button class="btn" id="bs-run">⬇ Start import</button>
         </div>
         <div id="bs-progress" style="margin-top:14px"></div>
+        <div id="bs-log-wrap" style="display:none;margin-top:10px">
+          <div style="font-size:.82rem;font-weight:600;margin-bottom:4px">Import log <span style="color:var(--muted);font-weight:400">(live — errors appear here as they happen)</span></div>
+          <div id="bs-log" style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.76rem;line-height:1.55;background:rgba(127,127,127,.06);border:1px solid var(--border);border-radius:10px;padding:8px 10px;height:240px;overflow:auto"></div>
+        </div>
         <div id="bs-summary" style="margin-top:10px"></div>
+      </div>
+      <div class="panel" style="margin-top:14px"><h3>🕘 Past imports</h3>
+        <p style="color:var(--muted);font-size:.85rem">The last 3 import runs are kept with their full logs — expand one to review exactly what happened, errors included.</p>
+        <div id="bs-past">Loading…</div>
       </div>`;
 
     const creds = () => ({
@@ -1597,6 +1605,41 @@ const AdminView = {
       token_id: document.getElementById('bs-tid').value,
       token_secret: document.getElementById('bs-tsecret').value,
     });
+    /* ---- import log: streamed live during a run; last 3 runs kept below ---- */
+    const logLineHtml = (l) => {
+      const style = l.level === 'error' ? ' style="color:var(--red)"' : l.level === 'warn' ? ' style="color:var(--amber)"' : '';
+      const mark = l.level === 'error' ? '✖' : l.level === 'warn' ? '⚠' : '•';
+      return `<div${style}>${esc(String(l.t || '').slice(11, 19))} ${mark} ${esc(l.message || '')}</div>`;
+    };
+    let logSeen = 0; // lines of the current run already rendered
+    const appendLogLines = (lines) => {
+      if (!lines || !lines.length) return;
+      document.getElementById('bs-log-wrap').style.display = '';
+      const box = document.getElementById('bs-log');
+      box.insertAdjacentHTML('beforeend', lines.map(logLineHtml).join(''));
+      logSeen += lines.length;
+      box.scrollTop = box.scrollHeight; // stay pinned to the newest line
+    };
+    const loadPast = async () => {
+      const el = document.getElementById('bs-past');
+      if (!el) return;
+      try {
+        const d = await api('/api/admin/bookstack/import/runs');
+        const runs = d.runs || [];
+        if (!runs.length) { el.innerHTML = '<p style="color:var(--muted);font-size:.85rem">No imports recorded yet.</p>'; return; }
+        el.innerHTML = runs.map(r => {
+          const x = r.summary || {};
+          const when = esc(String(r.started_at || '').replace('T', ' ').slice(0, 19));
+          const counts = `${x.articles_created ?? 0} created · ${x.articles_updated ?? 0} updated · ${x.articles_skipped ?? 0} skipped · ${x.media_imported ?? 0} media imported · ${x.media_failed ?? 0} media failed · ${(x.failures || []).length} failure(s)`;
+          const logHtml = (r.log || []).map(logLineHtml).join('');
+          return `<details style="border:1px solid var(--border);border-radius:10px;padding:8px 12px;margin-bottom:8px">
+            <summary style="cursor:pointer;font-size:.88rem">${r.status === 'done' ? '✅' : '❌'} <strong>${when}</strong> · ${esc(r.base_url || '')} — ${esc(counts)}${r.error ? ' — ❌ ' + esc(r.error) : ''}</summary>
+            <div style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.76rem;line-height:1.55;max-height:300px;overflow:auto;margin-top:8px">${logHtml || '<div style="color:var(--muted)">(no log lines recorded)</div>'}</div>
+          </details>`;
+        }).join('');
+      } catch { el.innerHTML = '<p style="color:var(--muted);font-size:.85rem">Could not load past imports.</p>'; }
+    };
+    loadPast();
     const savedBox = document.getElementById('bs-saved');
     const paintSaved = (c) => {
       const removeBtn = document.getElementById('bs-remove');
@@ -1645,6 +1688,9 @@ const AdminView = {
       const prog = document.getElementById('bs-progress');
       const sum = document.getElementById('bs-summary');
       sum.innerHTML = '';
+      logSeen = 0;
+      document.getElementById('bs-log').innerHTML = '';
+      document.getElementById('bs-log-wrap').style.display = '';
       try {
         const payload = { ...creds(),
           status: document.getElementById('bs-status').value,
@@ -1654,16 +1700,17 @@ const AdminView = {
         const jobId = d.job.id;
         toast('BookStack import started', 'ok');
         const poll = async () => {
-          const s = await api('/api/admin/bookstack/import/status?id=' + encodeURIComponent(jobId));
+          const s = await api('/api/admin/bookstack/import/status?id=' + encodeURIComponent(jobId) + '&since=' + logSeen);
           const j = s.job;
           if (!j) { prog.innerHTML = 'Import job not found.'; return; }
+          appendLogLines(j.log);
           const pct = j.progress.pages_total ? Math.round((j.progress.pages_done / j.progress.pages_total) * 100) : 0;
           prog.innerHTML = j.status === 'running'
             ? `<div style="font-size:.85rem;margin-bottom:6px">⏳ ${esc(j.progress.phase)}${j.progress.current ? ' — ' + esc(j.progress.current) : ''} (${j.progress.pages_done}/${j.progress.pages_total} pages)</div>
                <div class="progress" style="height:8px"><div style="width:${pct}%"></div></div>`
             : '';
           if (j.status === 'running') { setTimeout(poll, 1000); return; }
-          if (j.status === 'failed') { sum.innerHTML = `<div class="empty">❌ Import failed: ${esc(j.error || 'unknown error')}</div>`; return; }
+          if (j.status === 'failed') { sum.innerHTML = `<div class="empty">❌ Import failed: ${esc(j.error || 'unknown error')}</div>`; loadPast(); return; }
           const x = j.summary || {};
           const cell = (n, l) => `<div class="stat"><div class="n">${n ?? 0}</div><div class="l">${l}</div></div>`;
           sum.innerHTML = `<h3>✅ Import complete</h3>
@@ -1678,6 +1725,7 @@ const AdminView = {
             ${x.failures && x.failures.length ? `<h4>Failures (${x.failures.length})</h4><div style="max-height:220px;overflow:auto"><table class="tbl"><thead><tr><th>Type</th><th>Item</th><th>Error</th></tr></thead>
               <tbody>${x.failures.map(f => `<tr><td>${esc(f.type)}</td><td>${esc(f.name)}</td><td>${esc(f.error)}</td></tr>`).join('')}</tbody></table></div>` : ''}
             <p style="font-size:.85rem"><a href="#/admin/articles">Review imported articles →</a> · <a href="#/admin/media">Open Media Library →</a></p>`;
+          loadPast();
         };
         poll();
       } catch (e) { sum.innerHTML = `<div class="empty">❌ ${esc(e.message)}</div>`; }

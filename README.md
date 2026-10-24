@@ -118,6 +118,7 @@ The SQLite database and uploads live in the `xcwiki-data` volume (`/app/data`). 
 - Books → categories, Pages → articles (chapter kept as a tag, page tags + author carried over, drafts stay drafts, HTML formatting preserved); each book's cover image is downloaded into the Media Library and set as the category's cover
 - Referenced images and page attachments are downloaded into the Media Library and the content is rewritten to the new hosted paths; links between imported pages are rewired to the new articles
 - Progress + completion summary; re-runs are idempotent (skip by default, or update in place) — no duplicates
+- **Live import log**: every run writes a timestamped log (books/categories, pages created/updated/skipped, media imported/reused, link rewrites, and any error as it happens) that streams into the tab while the import runs; each finished run is saved, and the **last 3 runs** stay listed under Past imports with their full logs for after-the-fact review
 
 ### Demo content
 

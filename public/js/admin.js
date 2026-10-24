@@ -460,7 +460,7 @@ const AdminView = {
       ${isCat ? '<p style="color:var(--muted);font-size:.85rem">A <strong>staff-only</strong> category (and everything in it) is hidden from all readers.</p>' : ''}
       <div style="overflow-x:auto;margin-top:12px"><table class="tbl"><thead><tr><th></th><th>Name</th><th>Slug</th><th>Description</th>${isCat ? '<th>Visibility</th>' : ''}<th>Order</th><th></th></tr></thead>
       <tbody>${rows.map(r => `
-        <tr><td>${isCat && r.icon_image ? `<img src="${esc(r.icon_image)}" style="width:30px;height:30px;object-fit:cover;border-radius:8px;vertical-align:middle">` : `<span style="background:${esc(r.color)}22;border-radius:8px;padding:4px 8px">${esc(r.icon)}</span>`}</td>
+        <tr><td>${isCat && (r.cover_image || r.icon_image) ? `<img src="${esc(r.cover_image || r.icon_image)}" style="width:52px;height:32px;object-fit:cover;border-radius:6px;vertical-align:middle">` : `<span style="background:${esc(r.color)}22;border-radius:8px;padding:4px 8px">${esc(r.icon)}</span>`}</td>
         <td><strong>${esc(r.name)}</strong></td><td style="color:var(--muted2)">/${esc(r.slug)}</td>
         <td style="color:var(--muted)">${esc(r.description || '')}</td>
         ${isCat ? `<td>${this.visPill(r.visibility === 'staff' ? 'staff' : 'all')}</td>` : ''}
@@ -483,13 +483,13 @@ const AdminView = {
           <label class="fld"><span>Sort order</span><input id="tx-order" type="number" value="${r?.sort_order ?? 0}"></label>
         </div>
         ${isCat ? `
-        <label class="fld"><span>Icon image <small style="color:var(--muted)">(optional — an uploaded image replaces the emoji at the same tile size)</small></span>
+        <label class="fld"><span>Cover image <small style="color:var(--muted)">(BookStack-style book cover — becomes the category's lead visual on cards and listings; the emoji icon is only a fallback when no cover is set)</small></span>
           <span style="display:flex;gap:8px;align-items:center">
-            <input id="tx-iconimg" value="${esc(r?.icon_image || '')}" placeholder="/media/…" style="flex:1">
-            <span id="tx-iconprev">${r?.icon_image ? `<img src="${esc(r.icon_image)}" style="width:30px;height:30px;object-fit:cover;border-radius:8px">` : ''}</span>
-            <label class="btn ghost small" style="cursor:pointer">Upload<input type="file" id="tx-iconfile" accept="image/*" style="display:none"></label>
-            <button class="btn ghost small" type="button" id="tx-iconpick">Library…</button>
-            <button class="btn ghost small" type="button" id="tx-iconclear">Clear</button>
+            <input id="tx-coverimg" value="${esc(r?.cover_image || r?.icon_image || '')}" placeholder="/media/…" style="flex:1">
+            <span id="tx-coverprev">${(r?.cover_image || r?.icon_image) ? `<img src="${esc(r.cover_image || r.icon_image)}" style="width:52px;height:32px;object-fit:cover;border-radius:6px">` : ''}</span>
+            <label class="btn ghost small" style="cursor:pointer">Upload<input type="file" id="tx-coverfile" accept="image/*" style="display:none"></label>
+            <button class="btn ghost small" type="button" id="tx-coverpick">Library…</button>
+            <button class="btn ghost small" type="button" id="tx-coverclear">Clear</button>
           </span></label>` : ''}
         ${isCat ? `
         <div class="form-row3">
@@ -503,16 +503,16 @@ const AdminView = {
         </div>`;
       document.getElementById('tx-cancel').onclick = () => this.taxManager(main, kind);
       if (isCat) {
-        const iconInput = document.getElementById('tx-iconimg');
-        const iconPrev = document.getElementById('tx-iconprev');
-        const setIcon = (url) => { iconInput.value = url || ''; iconPrev.innerHTML = url ? `<img src="${esc(url)}" style="width:30px;height:30px;object-fit:cover;border-radius:8px">` : ''; };
-        iconInput.addEventListener('input', () => setIcon(iconInput.value));
-        document.getElementById('tx-iconclear').onclick = () => setIcon('');
-        document.getElementById('tx-iconpick').onclick = () => this.openMediaPicker({ kind: 'image', title: 'Choose category icon', cb: (f) => setIcon(f.url) });
-        document.getElementById('tx-iconfile').onchange = async (e) => {
+        const coverInput = document.getElementById('tx-coverimg');
+        const coverPrev = document.getElementById('tx-coverprev');
+        const setCover = (url) => { coverInput.value = url || ''; coverPrev.innerHTML = url ? `<img src="${esc(url)}" style="width:52px;height:32px;object-fit:cover;border-radius:6px">` : ''; };
+        coverInput.addEventListener('input', () => setCover(coverInput.value));
+        document.getElementById('tx-coverclear').onclick = () => setCover('');
+        document.getElementById('tx-coverpick').onclick = () => this.openMediaPicker({ kind: 'image', title: 'Choose category cover', cb: (f) => setCover(f.url) });
+        document.getElementById('tx-coverfile').onchange = async (e) => {
           const f = e.target.files[0];
           if (!f) return;
-          try { const [up] = await this.uploadFiles([f]); setIcon(up.url); toast('Icon uploaded', 'ok'); }
+          try { const [up] = await this.uploadFiles([f]); setCover(up.url); toast('Cover uploaded', 'ok'); }
           catch (err) { toast(err.message, 'err'); }
         };
       }
@@ -526,7 +526,8 @@ const AdminView = {
           sort_order: Number(document.getElementById('tx-order').value) || 0,
         };
         if (isCat) {
-          payload.icon_image = document.getElementById('tx-iconimg').value.trim();
+          payload.cover_image = document.getElementById('tx-coverimg').value.trim();
+          payload.icon_image = '';
           const p = document.getElementById('tx-parent');
           payload.parent_id = p && p.value ? Number(p.value) : null;
           payload.visibility = document.getElementById('tx-vis').value === 'staff' ? 'staff' : 'all';
@@ -1631,6 +1632,7 @@ const AdminView = {
               ${cell(x.articles_created, 'Articles created')}${cell(x.articles_updated, 'Articles updated')}
               ${cell(x.articles_skipped, 'Articles skipped')}${cell(x.media_imported, 'Media imported')}
               ${cell(x.media_reused, 'Media reused')}${cell(x.links_rewritten, 'Links rewritten')}
+              ${cell(x.covers_set, 'Book covers set')}
             </div>
             ${x.media_failed ? `<p style="color:var(--amber);font-size:.85rem">⚠️ ${x.media_failed} media file(s) failed to download.</p>` : ''}
             ${x.failures && x.failures.length ? `<h4>Failures (${x.failures.length})</h4><div style="max-height:220px;overflow:auto"><table class="tbl"><thead><tr><th>Type</th><th>Item</th><th>Error</th></tr></thead>

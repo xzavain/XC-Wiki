@@ -103,7 +103,7 @@ The SQLite database and uploads live in the `xcwiki-data` volume (`/app/data`). 
 - Article manager: search/filter (incl. visibility), bulk publish / unpublish / archive / **set visibility** / delete
 - Category / service / tag / redirect managers (categories have the staff-only toggle); user management with roles (admin, editor, viewer)
 - Preview-as-customer mode (purple banner); feedback inbox; search analytics (top + no-result queries)
-- 🎨 Site & Branding: title, tagline, logo (image upload + adjustable height 32–72 px) + favicon (image upload), primary/accent colors, dark/light theme colors, hero banner image editor (recommended 1600 × 520 px; fit, position and dark-overlay controls, optional decorative cards), footer, copyright, powered-by toggle, custom CSS — with live preview, applied instantly everywhere. Category icons can be uploaded images instead of emoji.
+- 🎨 Site & Branding: title, tagline, logo (image upload + adjustable height 32–72 px) + favicon (image upload), primary/accent colors, dark/light theme colors, hero banner image editor (recommended 1600 × 520 px; fit, position and dark-overlay controls, optional decorative cards), footer, copyright, powered-by toggle, custom CSS — with live preview, applied instantly everywhere. Categories carry a BookStack-style **cover image** as their lead visual on cards and listings (upload via the Media Library; the emoji icon remains only as a fallback when no cover is set).
 - Settings: JSON import/export
 
 ### Media library
@@ -115,7 +115,7 @@ The SQLite database and uploads live in the `xcwiki-data` volume (`/app/data`). 
 ### BookStack import
 
 - Admin → BookStack Import: enter the instance URL + API token (used only for the run, never saved), test the connection, then import
-- Books → categories, Pages → articles (chapter kept as a tag, page tags + author carried over, drafts stay drafts, HTML formatting preserved)
+- Books → categories, Pages → articles (chapter kept as a tag, page tags + author carried over, drafts stay drafts, HTML formatting preserved); each book's cover image is downloaded into the Media Library and set as the category's cover
 - Referenced images and page attachments are downloaded into the Media Library and the content is rewritten to the new hosted paths; links between imported pages are rewired to the new articles
 - Progress + completion summary; re-runs are idempotent (skip by default, or update in place) — no duplicates
 

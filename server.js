@@ -347,7 +347,7 @@ app.get('/api/settings/public', (req, res) => {
 function articleCard(row) {
   return {
     id: row.id, title: row.title, slug: row.slug, excerpt: row.excerpt,
-    category: row.category_name ? { name: row.category_name, slug: row.category_slug, icon: row.category_icon, icon_image: row.category_icon_image || '', color: row.category_color } : null,
+    category: row.category_name ? { name: row.category_name, slug: row.category_slug, icon: row.category_icon, icon_image: row.category_icon_image || '', cover_image: row.category_cover_image || '', color: row.category_color } : null,
     service: row.service_name ? { name: row.service_name, slug: row.service_slug, icon: row.service_icon } : null,
     views: row.views, helpful_yes: row.helpful_yes, helpful_no: row.helpful_no,
     reading_time_min: row.reading_time_min, featured: !!row.featured, pinned: !!row.pinned,
@@ -360,7 +360,7 @@ function articleCard(row) {
 const ARTICLE_JOIN = `
   LEFT JOIN categories c ON c.id = a.category_id
   LEFT JOIN services s ON s.id = a.service_id`;
-const ARTICLE_COLS = `a.*, c.name AS category_name, c.slug AS category_slug, c.icon AS category_icon, c.icon_image AS category_icon_image, c.color AS category_color,
+const ARTICLE_COLS = `a.*, c.name AS category_name, c.slug AS category_slug, c.icon AS category_icon, c.icon_image AS category_icon_image, c.cover_image AS category_cover_image, c.color AS category_color,
   s.name AS service_name, s.slug AS service_slug, s.icon AS service_icon`;
 
 app.get('/api/home', attachViewer, (req, res) => {
@@ -895,7 +895,7 @@ function crudRoutes(base, table, fields) {
   });
 }
 
-crudRoutes('categories', 'categories', ['description', 'icon', 'icon_image', 'color', 'parent_id', 'sort_order', 'visibility']);
+crudRoutes('categories', 'categories', ['description', 'icon', 'icon_image', 'cover_image', 'color', 'parent_id', 'sort_order', 'visibility']);
 crudRoutes('services', 'services', ['description', 'icon', 'color', 'sort_order']);
 
 app.get('/api/admin/tags', requireAuth, (req, res) => {

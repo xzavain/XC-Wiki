@@ -290,14 +290,11 @@ function artRow(a) {
   </div>`;
 }
 
-function catIconStyle(c) {
-  return `style="background:${esc(c.color || '#3B82F6')}22;color:${esc(c.color || '#3B82F6')}"`;
-}
-
-/* Category icon: an uploaded image when one is set, otherwise the font icon. */
-function catIconHtml(c) {
-  if (c && c.icon_image) return `<img src="${esc(c.icon_image)}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:inherit;display:block">`;
-  return esc((c && c.icon) || '📄');
+/* Category lead visual, BookStack-style: the cover image when one is set
+   (rendered as a cover band on the card), otherwise the icon/emoji tile. */
+function catCardVisual(c) {
+  if (c && c.cover_image) return `<img class="ci-cover" src="${esc(c.cover_image)}" alt="">`;
+  return `<span class="ci" style="background:${esc((c && c.color) || '#3B82F6')}22;color:${esc((c && c.color) || '#3B82F6')}">${esc((c && c.icon) || '📄')}</span>`;
 }
 
 /* ---------------- views ---------------- */
@@ -331,7 +328,7 @@ async function viewHome() {
     <div class="cat-grid">
       ${d.categories.map(c => `
         <a class="cat-card" href="#/category/${esc(c.slug)}">
-          <span class="ci" ${catIconStyle(c)}>${catIconHtml(c)}</span>
+          ${catCardVisual(c)}
           <strong>${esc(c.name)}</strong><small>${esc(c.description)}</small>
           <span class="arr">→</span>
         </a>`).join('')}
@@ -421,7 +418,7 @@ async function viewArticle(slug) {
         <h1>${esc(d.title)}</h1>
         <div class="article-meta">
           <span>👁 ${d.views} views</span><span>⏱ ${d.reading_time_min} min read</span>
-          ${d.category ? `<span>${d.category.icon_image ? `<img src="${esc(d.category.icon_image)}" alt="" style="width:16px;height:16px;object-fit:cover;border-radius:4px;vertical-align:-3px">` : esc(d.category.icon)} ${esc(d.category.name)}</span>` : ''}
+          ${d.category ? `<span>${(d.category.cover_image || d.category.icon_image) ? `<img src="${esc(d.category.cover_image || d.category.icon_image)}" alt="" style="width:16px;height:16px;object-fit:cover;border-radius:4px;vertical-align:-3px">` : esc(d.category.icon)} ${esc(d.category.name)}</span>` : ''}
           ${d.service ? `<span>${esc(d.service.icon)} ${esc(d.service.name)}</span>` : ''}
           ${d.author_name ? `<span>✍ ${esc(d.author_name)}</span>` : ''}
           <span>Updated ${timeAgo(d.updated_at)}</span>
@@ -501,7 +498,7 @@ async function viewTaxonomyList(kind) {
     <div class="cat-grid" style="grid-template-columns:repeat(3,1fr)">
     ${d.map(x => `
       <a class="cat-card" href="#/${kind === 'categories' ? 'category' : kind === 'services' ? 'service' : 'tag'}/${esc(x.slug)}">
-        <span class="ci" style="background:${esc(x.color || '#3B82F6')}22;color:${esc(x.color || '#3B82F6')}">${kind === 'categories' ? catIconHtml(x) : esc(x.icon || '🏷️')}</span>
+        ${kind === 'categories' ? catCardVisual(x) : `<span class="ci" style="background:${esc(x.color || '#3B82F6')}22;color:${esc(x.color || '#3B82F6')}">${esc(x.icon || '🏷️')}</span>`}
         <strong>${esc(x.name)}</strong><small>${esc(x.description || '')}${x.article_count !== undefined ? ` · ${x.article_count} articles` : ''}</small>
         <span class="arr">→</span>
       </a>`).join('')}
@@ -513,10 +510,13 @@ async function viewTaxonomyDetail(kind, slug) {
   const single = kind === 'category' ? 'categories' : kind === 'service' ? 'services' : 'tags';
   const d = await api(`/api/${single}/${encodeURIComponent(slug)}`);
   const obj = d[kind];
-  const headIcon = kind === 'category' && obj.icon_image
-    ? `<img src="${esc(obj.icon_image)}" alt="" style="width:30px;height:30px;object-fit:cover;border-radius:8px;vertical-align:-6px">`
-    : esc(obj.icon || '');
+  const hasCover = kind === 'category' && obj.cover_image;
+  const headIcon = hasCover ? ''
+    : kind === 'category' && obj.icon_image
+      ? `<img src="${esc(obj.icon_image)}" alt="" style="width:30px;height:30px;object-fit:cover;border-radius:8px;vertical-align:-6px">`
+      : esc(obj.icon || '');
   app.innerHTML = `<div class="crumbs"><a href="#/">Home</a> › <a href="#/${single}">${single[0].toUpperCase() + single.slice(1)}</a> › ${esc(obj.name)}</div>
+    ${hasCover ? `<img class="cat-banner" src="${esc(obj.cover_image)}" alt="">` : ''}
     <h1 style="margin-top:6px">${headIcon} ${esc(obj.name)}</h1>
     ${obj.description ? `<p style="color:var(--muted)">${esc(obj.description)}</p>` : ''}
     <div class="art-list" style="margin-top:14px">${d.articles.map(artRow).join('') || '<div class="empty">No articles yet.</div>'}</div>`;

@@ -436,6 +436,9 @@ label.fld > span { display: block; font-size: .78rem; color: var(--muted); margi
 .footer .footer-admin { color: var(--muted2); opacity: .55; font-size: .92em; }
 .footer .footer-admin:hover { opacity: 1; }
 .md video, .md audio, .wysi-preview video, .wysi-preview audio, .wysi-edit video, .wysi-edit audio { max-width: 100%; margin: .6em 0; }
+/* category covers (BookStack-style): cover band on cards, banner on the category page */
+.cat-card .ci-cover { width: 100%; height: 64px; object-fit: cover; border-radius: 8px; display: block; }
+.cat-banner { width: 100%; max-height: 160px; object-fit: cover; border-radius: 12px; display: block; margin: 10px 0 4px; border: 1px solid var(--border); }
 
 @media (max-width: 640px) {
   .wysi-toolbar { gap: 2px; }

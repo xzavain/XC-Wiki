@@ -141,6 +141,14 @@ function applyBranding(s) {
 
 /* ---------------- user area / preview ---------------- */
 
+/* Private wiki chrome: the top bar, the main navigation and the search
+   belong to signed-in users only. <body> starts out .auth-locked (so the
+   chrome never flashes before the session check runs) and this lifts the
+   lock once a session exists — and re-applies it on sign-out or expiry. */
+function syncChrome() {
+  document.body.classList.toggle('auth-locked', !App.user);
+}
+
 function renderUserArea() {
   const el = document.getElementById('user-area');
   const banner = document.getElementById('preview-banner');
@@ -191,6 +199,7 @@ function renderUserArea() {
     el.innerHTML = `<a class="btn ghost small" href="#/customer-login">Customer login</a>`;
     banner.classList.add('hidden');
   }
+  syncChrome();
 }
 
 function setPreviewMode(on) {
@@ -733,6 +742,7 @@ function setActiveNav(name) {
 }
 
 async function route() {
+  syncChrome();
   if (App._cleanup) { App._cleanup(); App._cleanup = null; }
   window.scrollTo(0, 0);
   document.getElementById('search-modal').classList.add('hidden');

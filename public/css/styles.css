@@ -444,3 +444,10 @@ label.fld > span { display: block; font-size: .78rem; color: var(--muted); margi
   .wysi-toolbar { gap: 2px; }
   .wt-group button { min-width: 26px; height: 28px; }
 }
+
+/* Private wiki: before sign-in, only the sign-in/setup screens show — the
+   top bar, main navigation and search stay hidden until a session exists
+   (the .auth-locked class on <body> is lifted by syncChrome in app.js). */
+body.auth-locked .topbar,
+body.auth-locked .mainnav,
+body.auth-locked #search-modal { display: none !important; }

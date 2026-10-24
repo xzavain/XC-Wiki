@@ -15,8 +15,8 @@ const AdminView = {
       ['services', '🖥️ Services'], ['tags', '🏷️ Tags'], ['media', '🖼️ Media'],
       ['customers', '🙋 Customers'], ['groups', '👪 Groups'],
       ['redirects', '↪ Redirects'], ['feedback', '💬 Feedback'], ['search', '🔍 Search Analytics'],
-      ['branding', '🎨 Branding'], ['backup', '☁️ Cloud Backup'],
-      ['users', '👥 Users'], ['viewas', '👁 View As'], ['settings', '⚙️ Settings'],
+      ['branding', '🎨 Branding'], ['backup', '☁️ Cloud Backup'], ['bookstack', '📚 BookStack Import'],
+      ['demo', '🧪 Demo Content'], ['users', '👥 Users'], ['viewas', '👁 View As'], ['settings', '⚙️ Settings'],
     ];
     app.innerHTML = `
       <div class="crumbs"><a href="#/">Knowledge Base</a> › Staff Dashboard</div>
@@ -42,6 +42,8 @@ const AdminView = {
       else if (view === 'search') await this.searchAnalytics(main);
       else if (view === 'branding') await this.branding(main);
       else if (view === 'backup') await this.backup(main);
+      else if (view === 'bookstack') await this.bookstack(main);
+      else if (view === 'demo') await this.demoContent(main);
       else if (view === 'users') await this.users(main);
       else if (view === 'viewas') await this.viewAs(main);
       else if (view === 'settings') await this.settings(main);
@@ -148,16 +150,23 @@ const AdminView = {
           <td><input type="checkbox" class="sel" value="${a.id}"></td>
           <td><a href="#/admin/article/${a.id}" style="color:var(--text);font-weight:600">${esc(a.title)}</a><br><small style="color:var(--muted2)">/${esc(a.slug)}</small></td>
           <td><span class="pill ${a.status}">${a.status}</span>${a.featured ? ' ⭐' : ''}</td>
-          <td>${this.visPill(a.visibility)}</td>
+          <td>${this.visPill(a.visibility)}${a.visibility === 'groups' ? `<div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap">${(a.groups || []).map(g => `<span class="pill" style="background:${esc(g.color || '#8B5CF6')}22;color:${esc(g.color || '#8B5CF6')}">${esc(g.name)}</span>`).join('') || '<span style="color:var(--red);font-size:.75rem">no group!</span>'}</div>` : ''}</td>
           <td>${a.category ? esc(a.category.name) : '—'}</td>
           <td>${a.views}</td>
           <td style="white-space:nowrap">${timeAgo(a.updated_at)}</td>
           <td style="white-space:nowrap">
+            ${a.status === 'draft' ? `<button class="link-btn" data-pub="${a.id}" style="color:var(--green);font-weight:700">Publish</button> · ` : ''}
             <a class="link-btn" href="#/article/${esc(a.slug)}" target="_blank">View</a> ·
             <a class="link-btn" href="#/admin/versions/${a.id}">History</a> ·
             <button class="link-btn" data-del="${a.id}" style="color:var(--red)">Delete</button>
           </td>
         </tr>`).join('') || '<tr><td colspan="8" class="empty">No articles.</td></tr>';
+      tb.querySelectorAll('[data-pub]').forEach(b => b.onclick = async () => {
+        try {
+          await api('/api/admin/articles/bulk', { method: 'POST', body: JSON.stringify({ ids: [Number(b.dataset.pub)], action: 'publish' }) });
+          toast('Article published', 'ok'); load();
+        } catch (e) { toast(e.message, 'err'); }
+      });
       tb.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
         if (!confirm('Delete this article permanently? This cannot be undone.')) return;
         await api('/api/admin/articles/' + b.dataset.del, { method: 'DELETE' });
@@ -211,28 +220,88 @@ const AdminView = {
     };
   },
 
-  /* ---------- media picker (for the editor) ---------- */
+  /* ---------- media helpers & picker (editor + library) ---------- */
 
-  openMediaPicker(cb) {
-    api('/api/admin/attachments').then(files => {
-      openModal(`<div style="padding:20px;max-width:640px">
-        <h3 style="margin-top:0">Insert image</h3>
-        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px;max-height:50vh;overflow:auto">
-          ${files.filter(f => f.mime_type.startsWith('image/')).map(f => `
-            <button class="med-pick" data-url="${f.url}" data-name="${esc(f.original_name)}" style="border:1px solid var(--border);border-radius:10px;padding:6px;background:var(--card);cursor:pointer">
-              <img src="${f.url}" style="width:100%;height:70px;object-fit:cover;border-radius:6px">
-              <div style="font-size:.68rem;margin-top:4px;word-break:break-all;color:var(--text)">${esc(f.original_name)}</div>
-            </button>`).join('') || '<div class="empty">No images yet — upload one in the Media Library first.</div>'}
-        </div>
-        <div style="margin-top:12px;text-align:right"><button class="btn ghost small" id="mp-cancel">Cancel</button></div>
-      </div>`);
-      document.getElementById('mp-cancel').onclick = closeModal;
-      document.querySelectorAll('.med-pick').forEach(b => b.onclick = () => {
+  async uploadFiles(fileList, articleId) {
+    const fd = new FormData();
+    for (const f of fileList) fd.append('files', f);
+    if (articleId) fd.append('article_id', articleId);
+    const res = await fetch('/api/admin/upload-multi', { method: 'POST', headers: { 'Authorization': 'Bearer ' + App.token }, body: fd });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || 'Upload failed');
+    return d.files;
+  },
+
+  mediaSnippet(f) {
+    const alt = esc(f.alt_text || f.title || f.original_name || '');
+    if (f.kind === 'image') {
+      const img = `<img src="${f.url}" alt="${alt}">`;
+      return f.caption ? `<figure>${img}<figcaption>${esc(f.caption)}</figcaption></figure>` : img;
+    }
+    if (f.kind === 'video') return `<video controls preload="metadata" src="${f.url}"></video>`;
+    if (f.kind === 'audio') return `<audio controls src="${f.url}"></audio>`;
+    return `<a href="${f.url}">${esc(f.title || f.original_name || 'Download file')}</a>`;
+  },
+
+  /** Library picker: choose an existing upload or upload in place.
+      opts: { kind: 'image'|'video'|'audio'|'file'|'all', title, cb(file) } */
+  openMediaPicker(opts = {}) {
+    const kind = opts.kind || 'all';
+    const wantKind = kind === 'file' ? null : kind; // "file" insert accepts any kind
+    openModal(`<div style="padding:20px;max-width:720px">
+      <h3 style="margin-top:0">${esc(opts.title || 'Choose from Media Library')}</h3>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+        <input type="text" id="mp-q" placeholder="Search files…" style="flex:1;min-width:160px">
+        <label class="btn ghost small" style="cursor:pointer">⬆ Upload new<input type="file" id="mp-file" ${kind === 'image' ? 'accept="image/*"' : kind === 'video' ? 'accept="video/*"' : kind === 'audio' ? 'accept="audio/*"' : ''} multiple style="display:none"></label>
+        <button class="btn ghost small" id="mp-cancel">Cancel</button>
+      </div>
+      <div id="mp-status" style="font-size:.8rem;color:var(--muted);margin-bottom:8px"></div>
+      <div id="mp-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;max-height:52vh;overflow:auto"><div class="empty">Loading…</div></div>
+    </div>`);
+    const grid = document.getElementById('mp-grid');
+    let all = [];
+    const render = () => {
+      const q = document.getElementById('mp-q').value.trim().toLowerCase();
+      const files = all.filter(f => (!wantKind || f.kind === wantKind) &&
+        (!q || (f.original_name + ' ' + (f.title || '')).toLowerCase().includes(q)));
+      grid.innerHTML = files.map(f => `
+        <button class="med-pick" data-id="${f.id}" style="border:1px solid var(--border);border-radius:10px;padding:6px;background:var(--card);cursor:pointer;text-align:left">
+          ${f.kind === 'image' ? `<img src="${f.url}" style="width:100%;height:70px;object-fit:cover;border-radius:6px">`
+            : f.kind === 'video' ? `<video src="${f.url}" preload="metadata" style="width:100%;height:70px;object-fit:cover;border-radius:6px;background:#000"></video>`
+            : `<div style="height:70px;display:flex;align-items:center;justify-content:center;font-size:1.7rem">${f.kind === 'audio' ? '🎵' : '📎'}</div>`}
+          <div style="font-size:.68rem;margin-top:4px;word-break:break-all;color:var(--text)">${esc(f.title || f.original_name)}</div>
+          <div style="font-size:.62rem;color:var(--muted2)">${esc(f.kind)} · ${(f.size_bytes / 1024).toFixed(0)} KB</div>
+        </button>`).join('') || '<div class="empty">No matching files — upload one above.</div>';
+      grid.querySelectorAll('.med-pick').forEach(b => b.onclick = () => {
+        const f = all.find(x => String(x.id) === b.dataset.id);
         closeModal();
-        cb(b.dataset.url, b.dataset.name);
-        toast('Image inserted — add alt text if you like', 'ok');
+        if (f && opts.cb) opts.cb(f);
       });
-    }).catch(e => toast(e.message, 'err'));
+    };
+    const loadLib = async () => { all = await api('/api/admin/attachments'); render(); };
+    loadLib().catch(e => { grid.innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
+    document.getElementById('mp-q').oninput = render;
+    document.getElementById('mp-cancel').onclick = closeModal;
+    document.getElementById('mp-file').onchange = async (e) => {
+      const files = [...e.target.files];
+      if (!files.length) return;
+      const st = document.getElementById('mp-status');
+      st.textContent = `Uploading ${files.length} file(s)…`;
+      try {
+        const up = await this.uploadFiles(files);
+        if (up.length === 1 && opts.cb) { closeModal(); opts.cb(up[0]); return; }
+        st.textContent = `Uploaded ${up.length} file(s) — click one to insert.`;
+        await loadLib();
+      } catch (err) { st.textContent = 'Upload failed: ' + err.message; }
+    };
+  },
+
+  insertMediaFlow(kind, insert) {
+    this.openMediaPicker({
+      kind,
+      title: kind === 'image' ? 'Insert image' : kind === 'video' ? 'Insert video' : 'Insert file',
+      cb: (f) => { insert(this.mediaSnippet(f)); toast('Inserted', 'ok'); },
+    });
   },
 
   /* ---------- editor (WYSIWYG) ---------- */
@@ -250,7 +319,8 @@ const AdminView = {
         <div style="display:flex;gap:8px">
           ${!isNew ? `<a class="btn ghost small" href="#/admin/versions/${a.id}">🕘 History</a>
           <a class="btn ghost small" href="#/article/${esc(a.slug)}" target="_blank">View live</a>` : ''}
-          <button class="btn small" id="ed-save">💾 Save</button>
+          ${isNew ? '<button class="btn ghost small" id="ed-draft">Save as draft</button>' : ''}
+          <button class="btn small" id="ed-save">${isNew ? '💾 Save & Publish' : '💾 Save'}</button>
         </div>
       </div>
       <div class="form-row" style="margin-top:12px">
@@ -261,7 +331,7 @@ const AdminView = {
         <label class="fld"><span>Category</span><select id="ed-cat"><option value="">—</option>${this.tax.categories.map(c => `<option value="${c.id}" ${a?.category_id === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>
         <label class="fld"><span>Service</span><select id="ed-svc"><option value="">—</option>${this.tax.services.map(s => `<option value="${s.id}" ${a?.service_id === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label>
         <label class="fld"><span>Status</span><select id="ed-status">
-          ${['draft', 'published', 'scheduled', 'archived'].map(s => `<option ${a?.status === s ? 'selected' : (!a && s === 'draft' ? 'selected' : '')}>${s}</option>`).join('')}
+          ${['draft', 'published', 'scheduled', 'archived'].map(s => `<option ${a?.status === s ? 'selected' : (!a && s === 'published' ? 'selected' : '')}>${s}</option>`).join('')}
         </select></label>
       </div>
       <div class="panel" style="margin:12px 0"><h3 style="margin-top:0">👁 Visibility</h3>
@@ -278,10 +348,14 @@ const AdminView = {
       </div>
       <div class="check-row"><input type="checkbox" id="ed-feat" ${a?.featured ? 'checked' : ''}> <label for="ed-feat">Featured (shows in Recommended)</label></div>
       <div class="check-row"><input type="checkbox" id="ed-pin" ${a?.pinned ? 'checked' : ''}> <label for="ed-pin">Pinned to top of lists</label></div>
-      <label class="fld"><span>Attach an image/file</span>
-        <span style="display:flex;gap:8px"><input type="file" id="ed-file" style="flex:1"><button class="btn ghost small" id="ed-upload" type="button">Upload</button></span>
-        <small style="color:var(--muted)">After uploading, the file is inserted into the editor at your cursor.</small>
-      </label>
+      <div class="fld"><span style="display:block;font-size:.78rem;color:var(--muted);margin-bottom:6px;font-weight:600">Insert media (hosted in the Media Library)</span>
+        <span style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn ghost small" id="ed-ins-image" type="button">🖼️ Image</button>
+          <button class="btn ghost small" id="ed-ins-video" type="button">🎬 Video</button>
+          <button class="btn ghost small" id="ed-ins-file" type="button">📎 File</button>
+        </span>
+        <small style="color:var(--muted)">Pick an existing upload or upload in place — the same buttons live in the editor toolbar.</small>
+      </div>
       <div id="wysi-mount" style="margin-top:10px"></div>`;
 
     document.querySelectorAll('input[name="ed-vis"]').forEach(r => r.onchange = () => {
@@ -290,40 +364,25 @@ const AdminView = {
 
     const ed = createWysiwyg(document.getElementById('wysi-mount'), {
       initialHtml: a?.content_html || '',
-      onPickImage: (cb) => this.openMediaPicker(cb),
+      onInsertMedia: (kind, insert) => this.insertMediaFlow(kind, insert),
     });
 
-    document.getElementById('ed-upload').onclick = async () => {
-      const f = document.getElementById('ed-file').files[0];
-      if (!f) { toast('Choose a file first', 'err'); return; }
-      const fd = new FormData();
-      fd.append('file', f);
-      if (!isNew) fd.append('article_id', id);
-      try {
-        const res = await fetch('/api/admin/upload', { method: 'POST', headers: { 'Authorization': 'Bearer ' + App.token }, body: fd });
-        const d = await res.json();
-        if (!res.ok) throw new Error(d.error || 'Upload failed');
-        if (f.type.startsWith('image/')) {
-          ed.focus();
-          document.execCommand('insertImage', false, d.url);
-          toast('Image inserted', 'ok');
-        } else {
-          await navigator.clipboard.writeText(`[${f.name}](${d.url})`).catch(() => {});
-          toast('Uploaded — link copied to clipboard', 'ok');
-        }
-      } catch (e) { toast(e.message, 'err'); }
-    };
+    const insertAtCursor = (html) => { ed.focus(); document.execCommand('insertHTML', false, html + '<p></p>'); };
+    document.getElementById('ed-ins-image').onclick = () => this.insertMediaFlow('image', insertAtCursor);
+    document.getElementById('ed-ins-video').onclick = () => this.insertMediaFlow('video', insertAtCursor);
+    document.getElementById('ed-ins-file').onclick = () => this.insertMediaFlow('file', insertAtCursor);
 
-    document.getElementById('ed-save').onclick = async () => {
+    const saveArticle = async (statusOverride) => {
       const visibility = document.querySelector('input[name="ed-vis"]:checked').value;
       const group_ids = [...document.querySelectorAll('.ed-group:checked')].map(c => Number(c.value));
+      const status = statusOverride || document.getElementById('ed-status').value;
       const payload = {
         title: document.getElementById('ed-title').value,
         slug: document.getElementById('ed-slug').value,
         content_html: ed.getHtml(),
         category_id: document.getElementById('ed-cat').value || null,
         service_id: document.getElementById('ed-svc').value || null,
-        status: document.getElementById('ed-status').value,
+        status,
         visibility,
         group_ids,
         tags: document.getElementById('ed-tags').value.split(','),
@@ -334,7 +393,12 @@ const AdminView = {
       try {
         if (isNew) {
           const d = await api('/api/admin/articles', { method: 'POST', body: JSON.stringify(payload) });
-          toast('Article created', 'ok');
+          if (visibility === 'groups' && status === 'published') {
+            const names = this.groups.filter(g => group_ids.includes(g.id)).map(g => g.name).join(', ');
+            toast(`Published to group: ${names}`, 'ok');
+          } else {
+            toast(status === 'published' ? 'Article published' : 'Article saved as draft', 'ok');
+          }
           location.hash = '#/admin/article/' + d.id;
         } else {
           await api('/api/admin/articles/' + id, { method: 'PUT', body: JSON.stringify(payload) });
@@ -342,6 +406,9 @@ const AdminView = {
         }
       } catch (e) { toast(e.message, 'err'); }
     };
+    document.getElementById('ed-save').onclick = () => saveArticle(isNew ? 'published' : undefined);
+    const draftBtn = document.getElementById('ed-draft');
+    if (draftBtn) draftBtn.onclick = () => saveArticle('draft');
   },
 
   /* ---------- versions ---------- */
@@ -393,7 +460,7 @@ const AdminView = {
       ${isCat ? '<p style="color:var(--muted);font-size:.85rem">A <strong>staff-only</strong> category (and everything in it) is hidden from all readers.</p>' : ''}
       <div style="overflow-x:auto;margin-top:12px"><table class="tbl"><thead><tr><th></th><th>Name</th><th>Slug</th><th>Description</th>${isCat ? '<th>Visibility</th>' : ''}<th>Order</th><th></th></tr></thead>
       <tbody>${rows.map(r => `
-        <tr><td><span style="background:${esc(r.color)}22;border-radius:8px;padding:4px 8px">${esc(r.icon)}</span></td>
+        <tr><td>${isCat && r.icon_image ? `<img src="${esc(r.icon_image)}" style="width:30px;height:30px;object-fit:cover;border-radius:8px;vertical-align:middle">` : `<span style="background:${esc(r.color)}22;border-radius:8px;padding:4px 8px">${esc(r.icon)}</span>`}</td>
         <td><strong>${esc(r.name)}</strong></td><td style="color:var(--muted2)">/${esc(r.slug)}</td>
         <td style="color:var(--muted)">${esc(r.description || '')}</td>
         ${isCat ? `<td>${this.visPill(r.visibility === 'staff' ? 'staff' : 'all')}</td>` : ''}
@@ -416,6 +483,15 @@ const AdminView = {
           <label class="fld"><span>Sort order</span><input id="tx-order" type="number" value="${r?.sort_order ?? 0}"></label>
         </div>
         ${isCat ? `
+        <label class="fld"><span>Icon image <small style="color:var(--muted)">(optional — an uploaded image replaces the emoji at the same tile size)</small></span>
+          <span style="display:flex;gap:8px;align-items:center">
+            <input id="tx-iconimg" value="${esc(r?.icon_image || '')}" placeholder="/media/…" style="flex:1">
+            <span id="tx-iconprev">${r?.icon_image ? `<img src="${esc(r.icon_image)}" style="width:30px;height:30px;object-fit:cover;border-radius:8px">` : ''}</span>
+            <label class="btn ghost small" style="cursor:pointer">Upload<input type="file" id="tx-iconfile" accept="image/*" style="display:none"></label>
+            <button class="btn ghost small" type="button" id="tx-iconpick">Library…</button>
+            <button class="btn ghost small" type="button" id="tx-iconclear">Clear</button>
+          </span></label>` : ''}
+        ${isCat ? `
         <div class="form-row3">
           <label class="fld"><span>Parent</span><select id="tx-parent"><option value="">None</option>${this.tax.categories.filter(c => !r || c.id !== r.id).map(c => `<option value="${c.id}" ${r?.parent_id === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>
           <label class="fld"><span>Visibility</span><select id="tx-vis">
@@ -426,6 +502,20 @@ const AdminView = {
         <div style="display:flex;gap:8px"><button class="btn small" id="tx-save">Save</button><button class="btn ghost small" id="tx-cancel">Cancel</button></div>
         </div>`;
       document.getElementById('tx-cancel').onclick = () => this.taxManager(main, kind);
+      if (isCat) {
+        const iconInput = document.getElementById('tx-iconimg');
+        const iconPrev = document.getElementById('tx-iconprev');
+        const setIcon = (url) => { iconInput.value = url || ''; iconPrev.innerHTML = url ? `<img src="${esc(url)}" style="width:30px;height:30px;object-fit:cover;border-radius:8px">` : ''; };
+        iconInput.addEventListener('input', () => setIcon(iconInput.value));
+        document.getElementById('tx-iconclear').onclick = () => setIcon('');
+        document.getElementById('tx-iconpick').onclick = () => this.openMediaPicker({ kind: 'image', title: 'Choose category icon', cb: (f) => setIcon(f.url) });
+        document.getElementById('tx-iconfile').onchange = async (e) => {
+          const f = e.target.files[0];
+          if (!f) return;
+          try { const [up] = await this.uploadFiles([f]); setIcon(up.url); toast('Icon uploaded', 'ok'); }
+          catch (err) { toast(err.message, 'err'); }
+        };
+      }
       document.getElementById('tx-save').onclick = async () => {
         const payload = {
           name: document.getElementById('tx-name').value,
@@ -436,6 +526,7 @@ const AdminView = {
           sort_order: Number(document.getElementById('tx-order').value) || 0,
         };
         if (isCat) {
+          payload.icon_image = document.getElementById('tx-iconimg').value.trim();
           const p = document.getElementById('tx-parent');
           payload.parent_id = p && p.value ? Number(p.value) : null;
           payload.visibility = document.getElementById('tx-vis').value === 'staff' ? 'staff' : 'all';
@@ -473,45 +564,174 @@ const AdminView = {
   /* ---------- media library ---------- */
 
   async media(main) {
-    const files = await api('/api/admin/attachments');
+    const state = { files: [], q: '', kind: '', sort: 'newest', view: 'grid', selected: new Set() };
     main.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:center"><h2 style="margin:0">Media Library</h2></div>
-      <div class="panel" style="margin:12px 0">
-        <label class="fld"><span>Upload image or file (images, PDF, text, zip — 15 MB max)</span>
-        <span style="display:flex;gap:8px"><input type="file" id="med-file"><button class="btn small" id="med-up">Upload</button></span></label>
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+        <h2 style="margin:0">Media Library</h2>
+        <span style="color:var(--muted);font-size:.82rem" id="med-count"></span>
       </div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px">
-        ${files.map(f => `
-          <div class="panel" style="padding:10px;text-align:center">
-            ${f.mime_type.startsWith('image/') ? `<img src="${f.url}" style="width:100%;height:90px;object-fit:cover;border-radius:8px">` : `<div style="font-size:2rem;padding:18px">📎</div>`}
-            <div style="font-size:.74rem;margin-top:6px;word-break:break-all">${esc(f.original_name)}</div>
-            <div style="font-size:.7rem;color:var(--muted2)">${(f.size_bytes / 1024).toFixed(0)} KB</div>
-            <div style="display:flex;gap:4px;justify-content:center;margin-top:6px">
-              <button class="btn ghost small" data-copy="${f.url}">Copy URL</button>
-              <button class="btn ghost small" data-fdel="${f.id}" style="color:var(--red)">✕</button>
+      <div class="panel" style="margin:12px 0">
+        <div id="med-drop" class="drop-zone">
+          <strong>Drop files here</strong> or
+          <label class="btn small" style="cursor:pointer;margin-left:6px">Choose files<input type="file" id="med-files" multiple style="display:none"></label>
+          <div style="font-size:.78rem;color:var(--muted);margin-top:6px">Images, videos, audio, PDFs, text, logs, zips — up to 15 MB each. Files are hosted on this instance.</div>
+          <div id="med-up-status" style="font-size:.8rem;margin-top:6px"></div>
+        </div>
+      </div>
+      <div class="toolbar">
+        <input type="text" id="med-q" placeholder="Search name/title…" style="max-width:220px">
+        <select id="med-kind" style="max-width:150px">
+          <option value="">All types</option><option value="image">🖼 Images</option><option value="video">🎬 Videos</option>
+          <option value="audio">🎵 Audio</option><option value="file">📎 Files</option>
+        </select>
+        <select id="med-sort" style="max-width:150px">
+          <option value="newest">Newest first</option><option value="oldest">Oldest first</option>
+          <option value="name">Name A–Z</option><option value="size">Largest first</option>
+        </select>
+        <button class="btn ghost small" id="med-view">${'▦ Grid'}</button>
+        <span id="med-bulk" style="display:none;gap:8px;align-items:center">
+          <span id="med-selcount" style="font-size:.82rem;color:var(--muted)"></span>
+          <button class="btn danger small" id="med-bulkdel">Delete selected</button>
+        </span>
+      </div>
+      <div id="med-body"></div>`;
+
+    const body = document.getElementById('med-body');
+    const kindIcon = (f) => f.kind === 'image' ? '🖼' : f.kind === 'video' ? '🎬' : f.kind === 'audio' ? '🎵' : '📎';
+    const thumb = (f, h) => f.kind === 'image'
+      ? `<img src="${f.url}" style="width:100%;height:${h}px;object-fit:cover;border-radius:8px">`
+      : f.kind === 'video'
+        ? `<video src="${f.url}" preload="metadata" style="width:100%;height:${h}px;object-fit:cover;border-radius:8px;background:#000"></video>`
+        : `<div style="height:${h}px;display:flex;align-items:center;justify-content:center;font-size:2rem">${kindIcon(f)}</div>`;
+
+    const render = () => {
+      let files = state.files.slice();
+      if (state.kind) files = files.filter(f => f.kind === state.kind);
+      if (state.q) files = files.filter(f => (f.original_name + ' ' + (f.title || '')).toLowerCase().includes(state.q));
+      if (!state.kind && !state.q) files = state.files.slice(); // server already sorted
+      document.getElementById('med-count').textContent = `${files.length} file(s) · ${(files.reduce((s, f) => s + f.size_bytes, 0) / 1024).toFixed(0)} KB total`;
+      const bulk = document.getElementById('med-bulk');
+      bulk.style.display = state.selected.size ? 'inline-flex' : 'none';
+      document.getElementById('med-selcount').textContent = `${state.selected.size} selected`;
+      if (!files.length) { body.innerHTML = '<div class="empty">No files match.</div>'; return; }
+      if (state.view === 'grid') {
+        body.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:12px">${files.map(f => `
+          <div class="panel" style="padding:10px">
+            <div style="display:flex;gap:6px;align-items:flex-start">${thumb(f, 92)}</div>
+            <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
+              <input type="checkbox" class="med-sel" data-id="${f.id}" ${state.selected.has(f.id) ? 'checked' : ''} style="width:auto">
+              <span class="pill" style="background:var(--input)">${kindIcon(f)} ${esc(f.kind)}</span>
+              <span style="font-size:.7rem;color:var(--muted2)">${(f.size_bytes / 1024).toFixed(0)} KB</span>
             </div>
-          </div>`).join('') || '<div class="empty">No files yet.</div>'}
-      </div>`;
-    document.getElementById('med-up').onclick = async () => {
-      const fi = document.getElementById('med-file').files[0];
-      if (!fi) { toast('Choose a file first', 'err'); return; }
-      const fd = new FormData(); fd.append('file', fi);
-      try {
-        const res = await fetch('/api/admin/upload', { method: 'POST', headers: { 'Authorization': 'Bearer ' + App.token }, body: fd });
-        const d = await res.json();
-        if (!res.ok) throw new Error(d.error || 'Upload failed');
-        toast('Uploaded', 'ok'); this.media(main);
-      } catch (e) { toast(e.message, 'err'); }
+            <div style="font-size:.76rem;margin-top:4px;word-break:break-all;font-weight:600">${esc(f.title || f.original_name)}</div>
+            ${f.article_title ? `<div style="font-size:.7rem;color:var(--muted)">on: ${esc(f.article_title)}</div>` : ''}
+            <div style="display:flex;gap:4px;margin-top:6px;flex-wrap:wrap">
+              <button class="btn ghost small" data-copy="${f.url}">Copy URL</button>
+              <button class="btn ghost small" data-fedit="${f.id}">Edit</button>
+              <button class="btn ghost small" data-fdel="${f.id}" style="color:var(--red)">Delete</button>
+            </div>
+          </div>`).join('')}</div>`;
+      } else {
+        body.innerHTML = `<div style="overflow-x:auto"><table class="tbl"><thead><tr><th></th><th></th><th>Name</th><th>Type</th><th>Size</th><th>Attached to</th><th>Uploaded</th><th></th></tr></thead><tbody>
+          ${files.map(f => `<tr>
+            <td><input type="checkbox" class="med-sel" data-id="${f.id}" ${state.selected.has(f.id) ? 'checked' : ''}></td>
+            <td style="width:64px">${thumb(f, 40)}</td>
+            <td><strong>${esc(f.title || f.original_name)}</strong><br><small style="color:var(--muted2)">${esc(f.original_name)}</small></td>
+            <td>${kindIcon(f)} ${esc(f.kind)}</td><td>${(f.size_bytes / 1024).toFixed(0)} KB</td>
+            <td>${f.article_title ? esc(f.article_title) : '<span style="color:var(--muted2)">—</span>'}</td>
+            <td style="white-space:nowrap">${timeAgo(f.uploaded_at)}</td>
+            <td style="white-space:nowrap"><button class="link-btn" data-copy="${f.url}">Copy URL</button> · <button class="link-btn" data-fedit="${f.id}">Edit</button> · <button class="link-btn" data-fdel="${f.id}" style="color:var(--red)">Delete</button></td>
+          </tr>`).join('')}</tbody></table></div>`;
+      }
+      body.querySelectorAll('.med-sel').forEach(c => c.onchange = () => {
+        const id = Number(c.dataset.id);
+        if (c.checked) state.selected.add(id); else state.selected.delete(id);
+        render();
+      });
+      body.querySelectorAll('[data-copy]').forEach(b => b.onclick = async () => {
+        await navigator.clipboard.writeText(location.origin + b.dataset.copy).catch(() => {});
+        toast('Hosted URL copied', 'ok');
+      });
+      body.querySelectorAll('[data-fdel]').forEach(b => b.onclick = async () => {
+        if (!confirm('Delete this file? Articles embedding it will lose the media.')) return;
+        await api('/api/admin/attachments/' + b.dataset.fdel, { method: 'DELETE' });
+        state.selected.delete(Number(b.dataset.fdel));
+        toast('Deleted', 'ok'); load();
+      });
+      body.querySelectorAll('[data-fedit]').forEach(b => b.onclick = () => this.mediaEdit(state.files.find(f => String(f.id) === b.dataset.fedit), load));
     };
-    main.querySelectorAll('[data-copy]').forEach(b => b.onclick = async () => {
-      await navigator.clipboard.writeText(location.origin + b.dataset.copy).catch(() => {});
-      toast('URL copied', 'ok');
-    });
-    main.querySelectorAll('[data-fdel]').forEach(b => b.onclick = async () => {
-      if (!confirm('Delete this file?')) return;
-      await api('/api/admin/attachments/' + b.dataset.fdel, { method: 'DELETE' });
-      toast('Deleted', 'ok'); this.media(main);
-    });
+
+    const load = async () => {
+      const q = new URLSearchParams();
+      if (state.kind) q.set('kind', state.kind);
+      q.set('sort', state.sort);
+      state.files = await api('/api/admin/attachments?' + q.toString());
+      render();
+    };
+
+    const doUpload = async (fileList) => {
+      const files = [...fileList];
+      if (!files.length) return;
+      const st = document.getElementById('med-up-status');
+      st.textContent = `Uploading ${files.length} file(s)…`;
+      try {
+        const up = await this.uploadFiles(files);
+        st.textContent = `✅ Uploaded ${up.length} file(s).`;
+        toast(`Uploaded ${up.length} file(s)`, 'ok');
+        load();
+      } catch (e) { st.textContent = '❌ ' + e.message; toast(e.message, 'err'); }
+    };
+
+    const drop = document.getElementById('med-drop');
+    drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
+    drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+    drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); doUpload(e.dataTransfer.files); });
+    document.getElementById('med-files').onchange = (e) => doUpload(e.target.files);
+    document.getElementById('med-q').oninput = (e) => { state.q = e.target.value.trim().toLowerCase(); render(); };
+    document.getElementById('med-kind').onchange = (e) => { state.kind = e.target.value; load(); };
+    document.getElementById('med-sort').onchange = (e) => { state.sort = e.target.value; load(); };
+    document.getElementById('med-view').onclick = (e) => {
+      state.view = state.view === 'grid' ? 'list' : 'grid';
+      e.target.textContent = state.view === 'grid' ? '▦ Grid' : '☰ List';
+      render();
+    };
+    document.getElementById('med-bulkdel').onclick = async () => {
+      const ids = [...state.selected];
+      if (!ids.length || !confirm(`Delete ${ids.length} file(s)?`)) return;
+      const r = await api('/api/admin/attachments/bulk-delete', { method: 'POST', body: JSON.stringify({ ids }) });
+      state.selected.clear();
+      toast(`Deleted ${r.deleted} file(s)`, 'ok'); load();
+    };
+    await load();
+  },
+
+  mediaEdit(f, reload) {
+    if (!f) return;
+    api('/api/admin/articles').then(articles => {
+      openModal(`<div style="padding:20px;max-width:520px">
+        <h3 style="margin-top:0">Edit media</h3>
+        ${f.kind === 'image' ? `<img src="${f.url}" style="width:100%;max-height:180px;object-fit:contain;border-radius:8px;background:var(--input)">` : ''}
+        <p style="font-size:.78rem;color:var(--muted);word-break:break-all">${esc(f.original_name)} · ${esc(f.mime_type)} · ${(f.size_bytes / 1024).toFixed(0)} KB<br>Hosted URL: <code>${esc(f.url)}</code></p>
+        <label class="fld"><span>Title</span><input id="fm-title" value="${esc(f.title || '')}"></label>
+        <label class="fld"><span>Alt text (images)</span><input id="fm-alt" value="${esc(f.alt_text || '')}"></label>
+        <label class="fld"><span>Caption</span><input id="fm-cap" value="${esc(f.caption || '')}"></label>
+        <label class="fld"><span>Attach to article</span><select id="fm-art"><option value="">— not attached —</option>
+          ${articles.map(a => `<option value="${a.id}" ${f.article_id === a.id ? 'selected' : ''}>${esc(a.title)}</option>`).join('')}</select></label>
+        <div style="display:flex;gap:8px;margin-top:12px"><button class="btn small" id="fm-save">Save</button><button class="btn ghost small" id="fm-cancel">Cancel</button></div>
+      </div>`);
+      document.getElementById('fm-cancel').onclick = closeModal;
+      document.getElementById('fm-save').onclick = async () => {
+        try {
+          await api('/api/admin/attachments/' + f.id, { method: 'PUT', body: JSON.stringify({
+            title: document.getElementById('fm-title').value,
+            alt_text: document.getElementById('fm-alt').value,
+            caption: document.getElementById('fm-cap').value,
+            article_id: document.getElementById('fm-art').value || null,
+          }) });
+          closeModal(); toast('Media updated', 'ok'); reload();
+        } catch (e) { toast(e.message, 'err'); }
+      };
+    }).catch(e => toast(e.message, 'err'));
   },
 
   /* ---------- redirects ---------- */
@@ -892,8 +1112,22 @@ const AdminView = {
               </select></label>
             </div>
             <div class="form-row">
-              <label class="fld"><span>Logo image URL <small style="color:var(--muted)">(upload in Media Library, paste URL)</small></span><input id="b-logourl" value="${esc(s.logo_url)}" placeholder="/media/…"></label>
-              <label class="fld"><span>Favicon URL</span><input id="b-fav" value="${esc(s.favicon_url)}" placeholder="/media/…"></label>
+              <label class="fld"><span>Logo image URL</span>
+                <span style="display:flex;gap:8px"><input id="b-logourl" value="${esc(s.logo_url)}" placeholder="/media/…" style="flex:1">
+                <label class="btn ghost small" style="cursor:pointer">Upload<input type="file" id="b-logo-file" accept="image/*" style="display:none"></label>
+                <button class="btn ghost small" type="button" id="b-logo-pick">Library…</button></span></label>
+              <label class="fld"><span>Favicon (URL or upload an image)</span>
+                <span style="display:flex;gap:8px;align-items:center"><input id="b-fav" value="${esc(s.favicon_url)}" placeholder="/media/…" style="flex:1">
+                <span id="b-fav-prev">${s.favicon_url ? `<img src="${esc(s.favicon_url)}" style="width:20px;height:20px;object-fit:contain">` : ''}</span>
+                <label class="btn ghost small" style="cursor:pointer">Upload<input type="file" id="b-fav-file" accept="image/*,.ico" style="display:none"></label>
+                <button class="btn ghost small" type="button" id="b-fav-pick">Library…</button></span></label>
+            </div>
+            <div class="form-row">
+              <label class="fld"><span>Logo size — height ${' '}<small style="color:var(--muted)">(32–72 px, default 48)</small></span>
+                <span style="display:flex;gap:10px;align-items:center">
+                  <input type="range" id="b-logoheight" min="32" max="72" step="1" value="${esc(s.logo_height || '48')}" style="flex:1">
+                  <input type="number" id="b-logoheight-num" min="32" max="72" value="${esc(s.logo_height || '48')}" style="width:76px"> px
+                </span></label>
             </div>
           </div>
           <div class="panel" style="margin-top:14px"><h3>Colors</h3>
@@ -917,6 +1151,23 @@ const AdminView = {
           <div class="panel" style="margin-top:14px"><h3>Homepage hero</h3>
             <label class="fld"><span>Hero title</span><input id="b-hero" value="${esc(s.hero_title)}"></label>
             <label class="fld"><span>Hero description</span><textarea id="b-herod" rows="2">${esc(s.hero_description)}</textarea></label>
+            <label class="fld"><span>Background banner image <small style="color:var(--muted)">(recommended size: 1600 × 520 px)</small></span>
+              <span style="display:flex;gap:8px"><input id="b-heroimg" value="${esc(s.hero_image_url || '')}" placeholder="/media/… or https://…" style="flex:1">
+              <label class="btn ghost small" style="cursor:pointer">Upload<input type="file" id="b-hero-file" accept="image/*" style="display:none"></label>
+              <button class="btn ghost small" type="button" id="b-hero-pick">Library…</button>
+              <button class="btn ghost small" type="button" id="b-hero-clear">Clear</button></span></label>
+            <div class="form-row3">
+              <label class="fld"><span>Image fit</span><select id="b-herofit">
+                <option value="cover" ${(s.hero_image_fit || 'cover') === 'cover' ? 'selected' : ''}>Cover (fill, cropped)</option>
+                <option value="contain" ${s.hero_image_fit === 'contain' ? 'selected' : ''}>Contain (whole image)</option>
+              </select></label>
+              <label class="fld"><span>Image position</span><select id="b-heropos">
+                ${['center', 'top', 'bottom', 'left', 'right'].map(p => `<option value="${p}" ${(s.hero_image_position || 'center') === p ? 'selected' : ''}>${p[0].toUpperCase() + p.slice(1)}</option>`).join('')}
+              </select></label>
+              <label class="fld"><span>Dark overlay — <span id="b-overlay-val">${esc(s.hero_overlay || '55')}</span>%</span>
+                <input type="range" id="b-overlay" min="0" max="95" step="1" value="${esc(s.hero_overlay || '55')}"></label>
+            </div>
+            <div class="check-row"><input type="checkbox" id="b-herocards" ${String(s.hero_show_cards ?? '1') === '1' ? 'checked' : ''}> <label for="b-herocards">Show decorative cards on the hero</label></div>
             <label class="fld"><span>Popular searches (one per line)</span><textarea id="b-pop" rows="4">${esc(JSON.parse(s.popular_searches || '[]').join('\n'))}</textarea></label>
           </div>
           <div class="panel" style="margin-top:14px"><h3>Footer</h3>
@@ -947,7 +1198,7 @@ const AdminView = {
           <span class="bp-mark" style="background:linear-gradient(135deg,${esc(primary)},${esc(accent)})">${v('b-logourl') ? '🖼' : esc((v('b-logo') || v('b-title') || 'XC').trim().slice(0, 2).toUpperCase())}</span>
           <span><strong>${esc(v('b-title'))}</strong><br><small>${esc(v('b-tagline'))}</small></span>
         </div>
-        <div class="bp-hero" style="background:linear-gradient(135deg,${esc(primary)}44,#101A33)">
+        <div class="bp-hero" style="background:linear-gradient(135deg,${esc(primary)}44,#101A33)${v('b-heroimg') ? `,url('${esc(v('b-heroimg'))}') center/${esc(v('b-herofit'))}` : ''}">
           <h3>${esc(v('b-hero'))}</h3>
           <p>${esc(v('b-herod')).slice(0, 140)}${v('b-herod').length > 140 ? '…' : ''}</p>
           <div class="bp-chips">${v('b-pop').split('\n').map(x => x.trim()).filter(Boolean).slice(0, 4).map(x => `<span>${esc(x)}</span>`).join('')}</div>
@@ -955,6 +1206,31 @@ const AdminView = {
         <div class="bp-foot">${esc(v('b-footer'))}${v('b-copy') ? ' · ' + esc(v('b-copy')) : ''}${document.getElementById('b-powered').checked ? ' · Powered by XC Wiki' : ''}</div>`;
     };
     main.querySelectorAll('input,textarea,select').forEach(el => el.addEventListener('input', paint));
+    // upload / library pickers for logo, favicon and hero image
+    const wireImageField = (fileId, pickId, inputId, after) => {
+      const input = document.getElementById(inputId);
+      document.getElementById(pickId).onclick = () => this.openMediaPicker({ kind: 'image', title: 'Choose image', cb: (f) => { input.value = f.url; input.dispatchEvent(new Event('input')); if (after) after(f.url); } });
+      document.getElementById(fileId).onchange = async (e) => {
+        const f = e.target.files[0];
+        if (!f) return;
+        try { const [up] = await this.uploadFiles([f]); input.value = up.url; input.dispatchEvent(new Event('input')); if (after) after(up.url); toast('Image uploaded', 'ok'); }
+        catch (err) { toast(err.message, 'err'); }
+      };
+    };
+    wireImageField('b-logo-file', 'b-logo-pick', 'b-logourl');
+    wireImageField('b-fav-file', 'b-fav-pick', 'b-fav', (url) => {
+      document.getElementById('b-fav-prev').innerHTML = url ? `<img src="${esc(url)}" style="width:20px;height:20px;object-fit:contain">` : '';
+    });
+    wireImageField('b-hero-file', 'b-hero-pick', 'b-heroimg');
+    document.getElementById('b-hero-clear').onclick = () => {
+      const i = document.getElementById('b-heroimg'); i.value = ''; i.dispatchEvent(new Event('input'));
+    };
+    const lh = document.getElementById('b-logoheight'), lhNum = document.getElementById('b-logoheight-num');
+    lh.addEventListener('input', () => { lhNum.value = lh.value; });
+    lhNum.addEventListener('input', () => { lh.value = lhNum.value; });
+    document.getElementById('b-overlay').addEventListener('input', (e) => {
+      document.getElementById('b-overlay-val').textContent = e.target.value;
+    });
     // sync color text + picker pairs
     [['b-primary'], ['b-accent'], ['b-dbg'], ['b-dsurf'], ['b-dtext'], ['b-lbg'], ['b-lsurf'], ['b-ltext']].forEach(([id]) => {
       const picker = document.getElementById(id), txt = document.getElementById(id + '-txt');
@@ -968,11 +1244,14 @@ const AdminView = {
       const v = id => document.getElementById(id).value;
       const payload = {
         site_title: v('b-title'), site_tagline: v('b-tagline'), logo_text: v('b-logo'),
-        logo_url: v('b-logourl'), favicon_url: v('b-fav'), default_theme: v('b-theme'),
+        logo_url: v('b-logourl'), logo_height: String(Math.max(32, Math.min(72, parseInt(v('b-logoheight-num'), 10) || 48))),
+        favicon_url: v('b-fav'), default_theme: v('b-theme'),
         primary_color: v('b-primary-txt'), accent_color: v('b-accent-txt'),
         dark_bg: v('b-dbg-txt'), dark_surface: v('b-dsurf-txt'), dark_text: v('b-dtext-txt'),
         light_bg: v('b-lbg-txt'), light_surface: v('b-lsurf-txt'), light_text: v('b-ltext-txt'),
         hero_title: v('b-hero'), hero_description: v('b-herod'),
+        hero_image_url: v('b-heroimg'), hero_image_fit: v('b-herofit'), hero_image_position: v('b-heropos'),
+        hero_overlay: v('b-overlay'), hero_show_cards: document.getElementById('b-herocards').checked ? '1' : '0',
         popular_searches: JSON.stringify(v('b-pop').split('\n').map(x => x.trim()).filter(Boolean)),
         footer_text: v('b-footer'), copyright_line: v('b-copy'),
         powered_by: document.getElementById('b-powered').checked ? '1' : '0',
@@ -1221,6 +1500,145 @@ const AdminView = {
           </div>
           <div class="panel" style="margin-top:12px"><h3>Sample search: “guide”</h3><div class="art-list">${list(d.search_sample)}</div></div>`;
       } catch (e) { out.innerHTML = `<div class="empty">Failed: ${esc(e.message)}</div>`; }
+    };
+  },
+
+  /* ---------- demo content manager ---------- */
+
+  async demoContent(main) {
+    const d = await api('/api/admin/demo');
+    const card = (n, l) => `<div class="stat"><div class="n">${n}</div><div class="l">${l}</div></div>`;
+    main.innerHTML = `<h2 style="margin-top:0">🧪 Demo Content</h2>
+      <p style="color:var(--muted);font-size:.88rem">The sample content this install was seeded with. Removing it deletes <strong>only</strong> the seeded rows listed below — articles, customers and groups you created yourself are never touched. Restore brings the seeded rows back.</p>
+      <div class="stat-grid">
+        ${card(d.articles, 'Demo articles')}
+        ${card(d.categories, 'Demo categories')}
+        ${card(d.services, 'Demo services')}
+        ${card(d.tags, 'Demo tags')}
+        ${card(d.customers, 'Demo customers')}
+        ${card(d.groups, 'Demo groups')}
+      </div>
+      <div class="panel">
+        <h3>${d.present ? 'Demo content is installed' : 'Demo content is removed'}</h3>
+        <p style="color:var(--muted);font-size:.85rem">${d.present
+          ? 'Remove the seeded demo rows to start from a clean slate. Demo categories, services or groups that your own articles now use are kept and reported.'
+          : 'Nothing seeded is currently present. Restore re-creates the demo articles, categories, services, tags, demo customers and groups.'}</p>
+        <div style="display:flex;gap:8px;margin-top:10px">
+          <button class="btn danger small" id="demo-remove" ${d.present ? '' : 'disabled'}>Remove demo content</button>
+          <button class="btn small" id="demo-restore">Restore demo content</button>
+        </div>
+        <div id="demo-result" style="margin-top:12px;font-size:.85rem"></div>
+      </div>`;
+    const out = document.getElementById('demo-result');
+    document.getElementById('demo-remove').onclick = async () => {
+      if (!confirm('Remove all seeded demo content? Your own content is not affected.')) return;
+      try {
+        const r = await api('/api/admin/demo/remove', { method: 'POST' });
+        const sk = r.skipped || {};
+        out.innerHTML = `✅ Removed ${r.removed.articles} article(s), ${r.removed.categories} categories, ${r.removed.services} services, ${r.removed.tags} tag(s), ${r.removed.customers} customer(s), ${r.removed.groups} group(s).` +
+          ((sk.categories || sk.services || sk.groups) ? `<br>⚠️ Kept ${sk.categories || 0} categories, ${sk.services || 0} services, ${sk.groups || 0} groups because your own articles use them.` : '');
+        toast('Demo content removed', 'ok');
+        setTimeout(() => this.demoContent(main), 1600);
+      } catch (e) { out.innerHTML = '❌ ' + esc(e.message); }
+    };
+    document.getElementById('demo-restore').onclick = async () => {
+      try {
+        const r = await api('/api/admin/demo/restore', { method: 'POST' });
+        out.innerHTML = `✅ Restored ${r.restored.articles} article(s), ${r.restored.categories} categories, ${r.restored.services} services, ${r.restored.customers} customer(s), ${r.restored.groups} group(s).`;
+        toast('Demo content restored', 'ok');
+        setTimeout(() => this.demoContent(main), 1600);
+      } catch (e) { out.innerHTML = '❌ ' + esc(e.message); }
+    };
+  },
+
+  /* ---------- BookStack import ---------- */
+
+  async bookstack(main) {
+    main.innerHTML = `<h2 style="margin-top:0">📚 BookStack Import</h2>
+      <p style="color:var(--muted);font-size:.88rem">Import a whole BookStack instance: <strong>Books become categories</strong> and <strong>Pages become articles</strong> with their HTML formatting preserved. Images and attachments referenced by the pages are downloaded into this wiki's Media Library and the content is rewritten to the new hosted paths; links between imported pages are rewired to the new articles. Create an API token in BookStack under <em>your profile → API Tokens</em>. The token is used only for the run and is <strong>never saved</strong>.</p>
+      <div class="panel">
+        <div class="form-row3">
+          <label class="fld"><span>BookStack base URL</span><input id="bs-url" placeholder="https://wiki.example.com"></label>
+          <label class="fld"><span>API Token ID</span><input id="bs-tid" autocomplete="off"></label>
+          <label class="fld"><span>API Token Secret</span><input id="bs-tsecret" type="password" autocomplete="off"></label>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button class="btn ghost small" id="bs-test">Test connection</button>
+          <span id="bs-test-out" style="font-size:.85rem"></span>
+        </div>
+      </div>
+      <div class="panel" style="margin-top:14px"><h3>Import options</h3>
+        <div class="form-row3">
+          <label class="fld"><span>Imported articles</span><select id="bs-status">
+            <option value="published">Published</option><option value="draft">Drafts</option>
+          </select></label>
+          <label class="fld"><span>Visibility</span><select id="bs-vis">
+            <option value="all">🌍 Everyone</option><option value="staff">🔒 Staff only</option>
+          </select></label>
+          <label class="fld"><span>Re-runs</span>
+            <span class="check-row" style="margin:6px 0"><input type="checkbox" id="bs-update"> <label for="bs-update">Update articles that were already imported</label></span>
+            <small style="color:var(--muted)">Off = previously imported pages are skipped (nothing duplicates either way; imported media is always reused).</small>
+          </label>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button class="btn" id="bs-run">⬇ Start import</button>
+        </div>
+        <div id="bs-progress" style="margin-top:14px"></div>
+        <div id="bs-summary" style="margin-top:10px"></div>
+      </div>`;
+
+    const creds = () => ({
+      base_url: document.getElementById('bs-url').value,
+      token_id: document.getElementById('bs-tid').value,
+      token_secret: document.getElementById('bs-tsecret').value,
+    });
+    document.getElementById('bs-test').onclick = async () => {
+      const out = document.getElementById('bs-test-out');
+      out.textContent = 'Testing…';
+      try {
+        const d = await api('/api/admin/bookstack/test', { method: 'POST', body: JSON.stringify(creds()) });
+        out.innerHTML = `✅ Connected to ${esc(d.base_url)} — <strong>${d.books}</strong> book(s), <strong>${d.pages}</strong> page(s) available.`;
+      } catch (e) { out.innerHTML = '❌ ' + esc(e.message); }
+    };
+    document.getElementById('bs-run').onclick = async () => {
+      const prog = document.getElementById('bs-progress');
+      const sum = document.getElementById('bs-summary');
+      sum.innerHTML = '';
+      try {
+        const payload = { ...creds(),
+          status: document.getElementById('bs-status').value,
+          visibility: document.getElementById('bs-vis').value,
+          update_existing: document.getElementById('bs-update').checked };
+        const d = await api('/api/admin/bookstack/import', { method: 'POST', body: JSON.stringify(payload) });
+        const jobId = d.job.id;
+        toast('BookStack import started', 'ok');
+        const poll = async () => {
+          const s = await api('/api/admin/bookstack/import/status?id=' + encodeURIComponent(jobId));
+          const j = s.job;
+          if (!j) { prog.innerHTML = 'Import job not found.'; return; }
+          const pct = j.progress.pages_total ? Math.round((j.progress.pages_done / j.progress.pages_total) * 100) : 0;
+          prog.innerHTML = j.status === 'running'
+            ? `<div style="font-size:.85rem;margin-bottom:6px">⏳ ${esc(j.progress.phase)}${j.progress.current ? ' — ' + esc(j.progress.current) : ''} (${j.progress.pages_done}/${j.progress.pages_total} pages)</div>
+               <div class="progress" style="height:8px"><div style="width:${pct}%"></div></div>`
+            : '';
+          if (j.status === 'running') { setTimeout(poll, 1000); return; }
+          if (j.status === 'failed') { sum.innerHTML = `<div class="empty">❌ Import failed: ${esc(j.error || 'unknown error')}</div>`; return; }
+          const x = j.summary || {};
+          const cell = (n, l) => `<div class="stat"><div class="n">${n ?? 0}</div><div class="l">${l}</div></div>`;
+          sum.innerHTML = `<h3>✅ Import complete</h3>
+            <div class="stat-grid">
+              ${cell(x.categories_created, 'Categories created')}${cell(x.categories_reused, 'Categories reused')}
+              ${cell(x.articles_created, 'Articles created')}${cell(x.articles_updated, 'Articles updated')}
+              ${cell(x.articles_skipped, 'Articles skipped')}${cell(x.media_imported, 'Media imported')}
+              ${cell(x.media_reused, 'Media reused')}${cell(x.links_rewritten, 'Links rewritten')}
+            </div>
+            ${x.media_failed ? `<p style="color:var(--amber);font-size:.85rem">⚠️ ${x.media_failed} media file(s) failed to download.</p>` : ''}
+            ${x.failures && x.failures.length ? `<h4>Failures (${x.failures.length})</h4><div style="max-height:220px;overflow:auto"><table class="tbl"><thead><tr><th>Type</th><th>Item</th><th>Error</th></tr></thead>
+              <tbody>${x.failures.map(f => `<tr><td>${esc(f.type)}</td><td>${esc(f.name)}</td><td>${esc(f.error)}</td></tr>`).join('')}</tbody></table></div>` : ''}
+            <p style="font-size:.85rem"><a href="#/admin/articles">Review imported articles →</a> · <a href="#/admin/media">Open Media Library →</a></p>`;
+        };
+        poll();
+      } catch (e) { sum.innerHTML = `<div class="empty">❌ ${esc(e.message)}</div>`; }
     };
   },
 

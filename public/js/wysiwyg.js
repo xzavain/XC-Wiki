@@ -37,6 +37,8 @@ function createWysiwyg(mount, opts = {}) {
         <div class="wt-group">
           <button data-act="link" title="Insert link">🔗</button>
           <button data-act="image" title="Insert image">🖼️</button>
+          <button data-act="video" title="Insert video">🎬</button>
+          <button data-act="file" title="Insert file link">📎</button>
           <button data-act="table" title="Insert table">▦</button>
           <button data-cmd="insertHorizontalRule" title="Horizontal rule">―</button>
         </div>
@@ -135,11 +137,18 @@ function createWysiwyg(mount, opts = {}) {
     if (act === 'link') {
       const url = prompt('Link URL (https://…):', 'https://');
       if (url) exec('createLink', url);
-    } else if (act === 'image') {
-      if (onPickImage) onPickImage((url, alt) => exec('insertImage', url));
-      else {
-        const url = prompt('Image URL:');
-        if (url) exec('insertImage', url);
+    } else if (act === 'image' || act === 'video' || act === 'file') {
+      if (opts.onInsertMedia) {
+        opts.onInsertMedia(act, (html) => { edit.focus(); document.execCommand('insertHTML', false, html + '<p></p>'); syncWords(); });
+      } else if (act === 'image' && onPickImage) {
+        onPickImage((url, alt) => exec('insertImage', url));
+      } else {
+        const url = prompt(act === 'image' ? 'Image URL:' : act === 'video' ? 'Video URL:' : 'File URL:');
+        if (url) {
+          if (act === 'image') exec('insertImage', url);
+          else if (act === 'video') exec('insertHTML', `<video controls src="${url}"></video>`);
+          else exec('insertHTML', `<a href="${url}">${url}</a>`);
+        }
       }
     } else if (act === 'table') {
       const rows = parseInt(prompt('Rows:', '3') || '3', 10);

@@ -83,6 +83,7 @@ The SQLite database and uploads live in the `xcwiki-data` volume (`/app/data`). 
 - Articles: **Everyone** · **Customer groups** (one or more groups) · **Staff only**
 - Categories: **Everyone** · **Staff only** (hides the category and all its articles from readers)
 - Enforced **server-side** on every read path (home, article fetch, search, taxonomy pages, related, prev/next, feedback). Forbidden articles return 404 — no title leak.
+- Guardrails: publishing a group-restricted article with no group selected is refused server-side; new articles default to Published with a **Save & Publish** action; the Articles list shows each group article's groups and offers one-click Publish for drafts; signed-in staff browsing the reader site see every published article (group-restricted and staff-only included).
 - Admin "👁 View As" tester previews the site as anonymous / staff / any customer.
 
 **Customers & groups**
@@ -102,8 +103,25 @@ The SQLite database and uploads live in the `xcwiki-data` volume (`/app/data`). 
 - Article manager: search/filter (incl. visibility), bulk publish / unpublish / archive / **set visibility** / delete
 - Category / service / tag / redirect managers (categories have the staff-only toggle); user management with roles (admin, editor, viewer)
 - Preview-as-customer mode (purple banner); feedback inbox; search analytics (top + no-result queries)
-- 🎨 Site & Branding: title, tagline, logo + favicon, primary/accent colors, dark/light theme colors, hero, footer, copyright, powered-by toggle, custom CSS — with live preview, applied instantly everywhere
+- 🎨 Site & Branding: title, tagline, logo (image upload + adjustable height 32–72 px) + favicon (image upload), primary/accent colors, dark/light theme colors, hero banner image editor (recommended 1600 × 520 px; fit, position and dark-overlay controls, optional decorative cards), footer, copyright, powered-by toggle, custom CSS — with live preview, applied instantly everywhere. Category icons can be uploaded images instead of emoji.
 - Settings: JSON import/export
+
+### Media library
+
+- WordPress-style library (Admin → Media): batch or single uploads via multi-file picker or drag & drop — images, videos, audio, PDFs, logs, zips up to 15 MB each, all hosted on the instance under `/media/…`
+- Grid/list views, search, type filters, sorting, per-file metadata (title, alt text, caption, attach-to-article), hosted-URL copy, single/bulk delete
+- The WYSIWYG editor inserts Image / Video / File from the library (upload in place or pick an existing upload); article pages render attached media
+
+### BookStack import
+
+- Admin → BookStack Import: enter the instance URL + API token (used only for the run, never saved), test the connection, then import
+- Books → categories, Pages → articles (chapter kept as a tag, page tags + author carried over, drafts stay drafts, HTML formatting preserved)
+- Referenced images and page attachments are downloaded into the Media Library and the content is rewritten to the new hosted paths; links between imported pages are rewired to the new articles
+- Progress + completion summary; re-runs are idempotent (skip by default, or update in place) — no duplicates
+
+### Demo content
+
+- Admin → Demo Content shows live counts of the seeded rows and can Remove / Restore them; only seeded rows are ever touched — your own content survives a remove/restore cycle untouched
 
 ## Demo credentials (seeded)
 

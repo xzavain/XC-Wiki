@@ -105,8 +105,12 @@ function applyBranding(s) {
   let el = document.getElementById('branding-css');
   if (!el) { el = document.createElement('style'); el.id = 'branding-css'; document.head.appendChild(el); }
   el.textContent = css + '\n' + (s.custom_css || '');
-  // logo
+  // logo (size adjustable 32–72px via branding, default 48)
   const mark = document.getElementById('brand-mark');
+  const logoH = Math.max(32, Math.min(72, parseInt(s.logo_height, 10) || 48));
+  mark.style.width = logoH + 'px';
+  mark.style.height = logoH + 'px';
+  mark.style.fontSize = Math.round(logoH * 0.34) + 'px';
   if (s.logo_url) {
     mark.innerHTML = `<img src="${esc(s.logo_url)}" alt="" style="width:100%;height:100%;object-fit:contain">`;
   } else {
@@ -182,7 +186,7 @@ function renderUserArea() {
     el.innerHTML = `<span class="chip">👁️ Preview Customer</span>`;
     banner.classList.remove('hidden');
   } else {
-    el.innerHTML = `<a class="btn ghost small" href="#/customer-login">Customer login</a> <a class="btn ghost small" href="#/login">Staff login</a>`;
+    el.innerHTML = `<a class="btn ghost small" href="#/customer-login">Customer login</a>`;
     banner.classList.add('hidden');
   }
 }
@@ -290,6 +294,12 @@ function catIconStyle(c) {
   return `style="background:${esc(c.color || '#3B82F6')}22;color:${esc(c.color || '#3B82F6')}"`;
 }
 
+/* Category icon: an uploaded image when one is set, otherwise the font icon. */
+function catIconHtml(c) {
+  if (c && c.icon_image) return `<img src="${esc(c.icon_image)}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:inherit;display:block">`;
+  return esc((c && c.icon) || '📄');
+}
+
 /* ---------------- views ---------------- */
 
 async function viewHome() {
@@ -300,8 +310,14 @@ async function viewHome() {
 
   const cont = await continueReadingCard();
 
+  const overlay = Math.max(0, Math.min(95, parseInt(s.hero_overlay, 10) || 0)) / 100;
+  const heroStyle = s.hero_image_url
+    ? ` style="background-image:linear-gradient(rgba(5,8,16,${overlay}),rgba(5,8,16,${overlay})),url('${esc(s.hero_image_url)}');background-size:${esc(s.hero_image_fit || 'cover')};background-position:${esc(s.hero_image_position || 'center')};background-repeat:no-repeat"`
+    : '';
+  const showCards = String(s.hero_show_cards ?? '1') === '1';
+
   app.innerHTML = `
-    <section class="hero">
+    <section class="hero"${heroStyle}>
       <h1>${esc(s.hero_title).replace('Knowledge Base', '<span class="hl">Knowledge Base</span>')}</h1>
       <p class="desc">${esc(s.hero_description)}</p>
       <div class="hero-search">
@@ -309,13 +325,13 @@ async function viewHome() {
         <button class="btn" id="hero-go">Search</button>
       </div>
       <div class="pop-searches"><span>Popular searches:</span>${pop.map(p => `<button class="chip" data-q="${esc(p)}">${esc(p)}</button>`).join('')}</div>
-      <div class="hero-cards"><div class="hero-card">XC</div><div class="hero-card">KB</div><div class="hero-card">✦</div></div>
+      ${showCards ? '<div class="hero-cards"><div class="hero-card">XC</div><div class="hero-card">KB</div><div class="hero-card">✦</div></div>' : ''}
     </section>
 
     <div class="cat-grid">
       ${d.categories.map(c => `
         <a class="cat-card" href="#/category/${esc(c.slug)}">
-          <span class="ci" ${catIconStyle(c)}>${esc(c.icon)}</span>
+          <span class="ci" ${catIconStyle(c)}>${catIconHtml(c)}</span>
           <strong>${esc(c.name)}</strong><small>${esc(c.description)}</small>
           <span class="arr">→</span>
         </a>`).join('')}
@@ -405,11 +421,18 @@ async function viewArticle(slug) {
         <h1>${esc(d.title)}</h1>
         <div class="article-meta">
           <span>👁 ${d.views} views</span><span>⏱ ${d.reading_time_min} min read</span>
-          ${d.category ? `<span>${esc(d.category.icon)} ${esc(d.category.name)}</span>` : ''}
+          ${d.category ? `<span>${d.category.icon_image ? `<img src="${esc(d.category.icon_image)}" alt="" style="width:16px;height:16px;object-fit:cover;border-radius:4px;vertical-align:-3px">` : esc(d.category.icon)} ${esc(d.category.name)}</span>` : ''}
           ${d.service ? `<span>${esc(d.service.icon)} ${esc(d.service.name)}</span>` : ''}
+          ${d.author_name ? `<span>✍ ${esc(d.author_name)}</span>` : ''}
           <span>Updated ${timeAgo(d.updated_at)}</span>
         </div>
         <div class="md" id="md-body">${d.content_html}</div>
+        ${d.attachments && d.attachments.length ? `<div class="attach-box"><h3>Attachments</h3>${d.attachments.map(f => {
+          if (f.kind === 'image') return `<figure class="attach-item"><img src="${f.url}" alt="${esc(f.alt_text || f.original_name)}">${f.caption ? `<figcaption>${esc(f.caption)}</figcaption>` : ''}</figure>`;
+          if (f.kind === 'video') return `<div class="attach-item"><video controls preload="metadata" src="${f.url}" style="max-width:100%;border-radius:8px"></video><div class="attach-name">${esc(f.title || f.original_name)}</div></div>`;
+          if (f.kind === 'audio') return `<div class="attach-item"><div class="attach-name">🎵 ${esc(f.title || f.original_name)}</div><audio controls src="${f.url}" style="width:100%"></audio></div>`;
+          return `<div class="attach-item"><a href="${f.url}" download>📎 ${esc(f.title || f.original_name)}</a> <span class="attach-name">${(f.size_bytes / 1024).toFixed(0)} KB</span></div>`;
+        }).join('')}</div>` : ''}
         <div class="tag-row">${(d.tags || []).map(t => `<a class="tag" href="#/tag/${esc(t.slug)}">${esc(t.name)}</a>`).join('')}</div>
         <div class="feedback-box" id="feedback-box">
           <strong>Was this helpful?</strong>
@@ -478,7 +501,7 @@ async function viewTaxonomyList(kind) {
     <div class="cat-grid" style="grid-template-columns:repeat(3,1fr)">
     ${d.map(x => `
       <a class="cat-card" href="#/${kind === 'categories' ? 'category' : kind === 'services' ? 'service' : 'tag'}/${esc(x.slug)}">
-        <span class="ci" style="background:${esc(x.color || '#3B82F6')}22;color:${esc(x.color || '#3B82F6')}">${esc(x.icon || '🏷️')}</span>
+        <span class="ci" style="background:${esc(x.color || '#3B82F6')}22;color:${esc(x.color || '#3B82F6')}">${kind === 'categories' ? catIconHtml(x) : esc(x.icon || '🏷️')}</span>
         <strong>${esc(x.name)}</strong><small>${esc(x.description || '')}${x.article_count !== undefined ? ` · ${x.article_count} articles` : ''}</small>
         <span class="arr">→</span>
       </a>`).join('')}
@@ -490,8 +513,11 @@ async function viewTaxonomyDetail(kind, slug) {
   const single = kind === 'category' ? 'categories' : kind === 'service' ? 'services' : 'tags';
   const d = await api(`/api/${single}/${encodeURIComponent(slug)}`);
   const obj = d[kind];
+  const headIcon = kind === 'category' && obj.icon_image
+    ? `<img src="${esc(obj.icon_image)}" alt="" style="width:30px;height:30px;object-fit:cover;border-radius:8px;vertical-align:-6px">`
+    : esc(obj.icon || '');
   app.innerHTML = `<div class="crumbs"><a href="#/">Home</a> › <a href="#/${single}">${single[0].toUpperCase() + single.slice(1)}</a> › ${esc(obj.name)}</div>
-    <h1 style="margin-top:6px">${esc(obj.icon || '')} ${esc(obj.name)}</h1>
+    <h1 style="margin-top:6px">${headIcon} ${esc(obj.name)}</h1>
     ${obj.description ? `<p style="color:var(--muted)">${esc(obj.description)}</p>` : ''}
     <div class="art-list" style="margin-top:14px">${d.articles.map(artRow).join('') || '<div class="empty">No articles yet.</div>'}</div>`;
 }

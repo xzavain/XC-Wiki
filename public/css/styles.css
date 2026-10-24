@@ -424,6 +424,19 @@ label.fld > span { display: block; font-size: .78rem; color: var(--muted); margi
 .bp-chips span { background: var(--input); border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px; font-size: .72rem; }
 .bp-foot { padding: 10px 14px; font-size: .72rem; color: var(--muted2); border-top: 1px solid var(--border); }
 
+/* ---------- media library / attachments / misc ---------- */
+.drop-zone { border: 2px dashed var(--border); border-radius: 12px; padding: 20px; text-align: center; transition: border-color .15s, background .15s; }
+.drop-zone.over { border-color: var(--accent); background: rgba(46,124,246,.06); }
+.attach-box { margin-top: 26px; padding: 18px; background: var(--card2); border: 1px solid var(--border); border-radius: var(--radius); }
+.attach-box h3 { margin-top: 0; font-size: .95rem; }
+.attach-item { margin: 10px 0; }
+.attach-item img { max-width: 100%; border-radius: 8px; }
+.attach-item figure, .attach-item { text-align: left; }
+.attach-name { color: var(--muted); font-size: .8rem; margin-top: 4px; }
+.footer .footer-admin { color: var(--muted2); opacity: .55; font-size: .92em; }
+.footer .footer-admin:hover { opacity: 1; }
+.md video, .md audio, .wysi-preview video, .wysi-preview audio, .wysi-edit video, .wysi-edit audio { max-width: 100%; margin: .6em 0; }
+
 @media (max-width: 640px) {
   .wysi-toolbar { gap: 2px; }
   .wt-group button { min-width: 26px; height: 28px; }

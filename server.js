@@ -15,6 +15,8 @@ const {
 } = require('./lib/db');
 const { hashPassword, verifyPassword, newToken, expiryFor } = require('./lib/auth');
 const cloud = require('./lib/cloud');
+const demoLib = require('./lib/demo');
+const bookstack = require('./lib/bookstack');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -64,14 +66,42 @@ const storage = multer.diskStorage({
     cb(null, require('crypto').randomBytes(16).toString('hex') + ext);
   },
 });
+function kindForFile(mime, name) {
+  const m = String(mime || '');
+  if (m.startsWith('image/')) return 'image';
+  if (m.startsWith('video/')) return 'video';
+  if (m.startsWith('audio/')) return 'audio';
+  const ext = String(name || '').split('.').pop().toLowerCase();
+  if (['mp4', 'webm', 'mov'].includes(ext)) return 'video';
+  if (['mp3', 'wav', 'ogg', 'm4a'].includes(ext)) return 'audio';
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico'].includes(ext)) return 'image';
+  return 'file';
+}
+
+const UPLOAD_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico',
+  'mp4', 'webm', 'mov', 'mp3', 'wav', 'ogg', 'm4a',
+  'pdf', 'txt', 'md', 'log', 'zip', 'json', 'csv']);
+const UPLOAD_MIMES = /^(image\/(png|jpe?g|gif|webp|svg\+xml|bmp|x-icon)|video\/|audio\/|application\/pdf|text\/(plain|markdown|csv)|application\/(zip|x-zip-compressed|json))$/;
+
 const upload = multer({
   storage,
   limits: { fileSize: 15 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    const ok = /^(image\/(png|jpe?g|gif|webp|svg\+xml)|application\/pdf|text\/(plain|markdown)|application\/zip)$/.test(file.mimetype);
+    const ext = (file.originalname || '').split('.').pop().toLowerCase();
+    const ok = UPLOAD_MIMES.test(file.mimetype) || UPLOAD_EXTS.has(ext);
     cb(ok ? null : new Error('File type not allowed'), ok);
   },
 });
+
+function insertAttachment(db, file, userId, articleId) {
+  const id = db.prepare(`INSERT INTO attachments
+    (article_id, original_name, stored_name, mime_type, size_bytes, uploaded_by, uploaded_at, title, kind)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(articleId || null, file.originalname.slice(0, 200), file.filename,
+      file.mimetype, file.size, userId, new Date().toISOString(),
+      file.originalname.slice(0, 200), kindForFile(file.mimetype, file.originalname)).lastInsertRowid;
+  return { id, url: `/media/${file.filename}`, name: file.originalname, kind: kindForFile(file.mimetype, file.originalname) };
+}
 
 app.get('/media/:name', (req, res) => {
   const name = String(req.params.name || '');
@@ -294,8 +324,9 @@ app.put('/api/customer/password', requireSignedIn, (req, res) => {
 /* ---------------- Public: settings & home ---------------- */
 
 const PUBLIC_BRANDING_KEYS = [
-  'site_title', 'site_tagline', 'logo_text', 'logo_url', 'favicon_url',
-  'hero_title', 'hero_description', 'popular_searches',
+  'site_title', 'site_tagline', 'logo_text', 'logo_url', 'logo_height', 'favicon_url',
+  'hero_title', 'hero_description', 'hero_image_url', 'hero_image_fit', 'hero_image_position',
+  'hero_overlay', 'hero_show_cards', 'popular_searches',
   'footer_text', 'copyright_line', 'powered_by', 'default_theme',
   'primary_color', 'accent_color',
   'dark_bg', 'dark_surface', 'dark_text',
@@ -316,7 +347,7 @@ app.get('/api/settings/public', (req, res) => {
 function articleCard(row) {
   return {
     id: row.id, title: row.title, slug: row.slug, excerpt: row.excerpt,
-    category: row.category_name ? { name: row.category_name, slug: row.category_slug, icon: row.category_icon, color: row.category_color } : null,
+    category: row.category_name ? { name: row.category_name, slug: row.category_slug, icon: row.category_icon, icon_image: row.category_icon_image || '', color: row.category_color } : null,
     service: row.service_name ? { name: row.service_name, slug: row.service_slug, icon: row.service_icon } : null,
     views: row.views, helpful_yes: row.helpful_yes, helpful_no: row.helpful_no,
     reading_time_min: row.reading_time_min, featured: !!row.featured, pinned: !!row.pinned,
@@ -329,7 +360,7 @@ function articleCard(row) {
 const ARTICLE_JOIN = `
   LEFT JOIN categories c ON c.id = a.category_id
   LEFT JOIN services s ON s.id = a.service_id`;
-const ARTICLE_COLS = `a.*, c.name AS category_name, c.slug AS category_slug, c.icon AS category_icon, c.color AS category_color,
+const ARTICLE_COLS = `a.*, c.name AS category_name, c.slug AS category_slug, c.icon AS category_icon, c.icon_image AS category_icon_image, c.color AS category_color,
   s.name AS service_name, s.slug AS service_slug, s.icon AS service_icon`;
 
 app.get('/api/home', attachViewer, (req, res) => {
@@ -397,6 +428,9 @@ app.get('/api/articles/:slug', attachViewer, (req, res) => {
   const groups = a.visibility === 'groups'
     ? db.prepare('SELECT g.id, g.name, g.color FROM customer_groups g JOIN article_groups ag ON ag.group_id = g.id WHERE ag.article_id = ?').all(a.id)
     : [];
+  const attachments = db.prepare(`SELECT id, original_name, stored_name, mime_type, size_bytes, kind, title, alt_text, caption
+    FROM attachments WHERE article_id = ? ORDER BY uploaded_at`).all(a.id)
+    .map(r => ({ ...r, url: `/media/${r.stored_name}` }));
   res.json({
     ...articleCard(a),
     content_html: html,
@@ -404,6 +438,8 @@ app.get('/api/articles/:slug', attachViewer, (req, res) => {
     tags,
     related,
     groups,
+    attachments,
+    author_name: a.author_name || '',
     prev: prev || null,
     next: next || null,
   });
@@ -576,6 +612,15 @@ function sanitizeVisibility(v) {
   return ['all', 'groups', 'staff'].includes(v) ? v : 'all';
 }
 
+/** Publishing a "Customer groups" article with no group selected would hide
+    it from everyone — refuse, so the mistake can never happen silently. */
+function groupPublishError(visibility, status, groupIds) {
+  if (visibility === 'groups' && status === 'published' && (!groupIds || !groupIds.length)) {
+    return 'Choose at least one customer group before publishing a group-restricted article.';
+  }
+  return null;
+}
+
 app.get('/api/admin/stats', requireAuth, (req, res) => {
   const db = getDb();
   const total = db.prepare("SELECT COUNT(*) AS n FROM articles").get().n;
@@ -607,7 +652,12 @@ app.get('/api/admin/articles', requireAuth, (req, res) => {
   if (q) { conds.push('(a.title LIKE ? OR a.slug LIKE ?)'); params.push(`%${q}%`, `%${q}%`); }
   const where = conds.length ? 'WHERE ' + conds.join(' AND ') : '';
   const rows = db.prepare(`SELECT ${ARTICLE_COLS} FROM articles a ${ARTICLE_JOIN} ${where} ORDER BY a.updated_at DESC LIMIT 500`).all(...params);
-  res.json(rows.map(articleCard));
+  const groupMap = {};
+  for (const r of db.prepare(`SELECT ag.article_id, g.id, g.name, g.color FROM article_groups ag
+    JOIN customer_groups g ON g.id = ag.group_id ORDER BY g.name`).all()) {
+    (groupMap[r.article_id] = groupMap[r.article_id] || []).push({ id: r.id, name: r.name, color: r.color });
+  }
+  res.json(rows.map(r => ({ ...articleCard(r), status: r.status, groups: groupMap[r.id] || [] })));
 });
 
 app.get('/api/admin/articles/:id', requireAuth, (req, res) => {
@@ -633,6 +683,8 @@ app.post('/api/admin/articles', requireAuth, (req, res) => {
   const slug = uniqueSlug(db, b.slug || b.title, 'articles');
   const status = ['draft', 'published', 'archived', 'scheduled'].includes(b.status) ? b.status : 'draft';
   const visibility = sanitizeVisibility(b.visibility);
+  const gErr = groupPublishError(visibility, status, visibility === 'groups' ? (b.group_ids || []) : []);
+  if (gErr) return res.status(400).json({ error: gErr });
   const id = db.prepare(`INSERT INTO articles
     (title, slug, content_html, content_text, excerpt, category_id, service_id, status, featured, pinned, visibility, author_id,
      reading_time_min, published_at, scheduled_at, created_at, updated_at)
@@ -675,6 +727,10 @@ app.put('/api/admin/articles/:id', requireAuth, (req, res) => {
   }
   const status = ['draft', 'published', 'archived', 'scheduled'].includes(b.status) ? b.status : cur.status;
   const visibility = b.visibility !== undefined ? sanitizeVisibility(b.visibility) : cur.visibility;
+  const existingGroupIds = db.prepare('SELECT group_id FROM article_groups WHERE article_id = ?').all(cur.id).map(r => r.group_id);
+  const finalGroupIds = b.group_ids !== undefined ? b.group_ids : existingGroupIds;
+  const gErr = groupPublishError(visibility, status, visibility === 'groups' ? finalGroupIds : []);
+  if (gErr) return res.status(400).json({ error: gErr });
   const published_at = (status === 'published' && !cur.published_at) ? now : cur.published_at;
   db.prepare(`UPDATE articles SET title = ?, slug = ?, content_html = ?, content_text = ?, excerpt = ?, category_id = ?, service_id = ?,
     status = ?, featured = ?, pinned = ?, visibility = ?, reading_time_min = ?, published_at = ?, scheduled_at = ?, updated_at = ? WHERE id = ?`)
@@ -693,7 +749,7 @@ app.put('/api/admin/articles/:id', requireAuth, (req, res) => {
     );
   if (b.tags !== undefined) syncArticleTags(db, cur.id, b.tags);
   if (b.group_ids !== undefined || b.visibility !== undefined) {
-    syncArticleGroups(db, cur.id, visibility === 'groups' ? (b.group_ids !== undefined ? b.group_ids : db.prepare('SELECT group_id FROM article_groups WHERE article_id = ?').all(cur.id).map(r => r.group_id)) : []);
+    syncArticleGroups(db, cur.id, visibility === 'groups' ? finalGroupIds : []);
   }
   if (content !== cur.content_html || title !== cur.title) {
     saveArticleVersion(db, cur.id, title, content, req.user.id, String(b.version_note || 'Edited'));
@@ -715,6 +771,19 @@ app.post('/api/admin/articles/bulk', requireAuth, (req, res) => {
   const db = getDb();
   const { ids, action, visibility, group_ids } = req.body || {};
   if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ error: 'No articles selected' });
+  if (action === 'publish') {
+    const blocked = ids.map(Number).filter(Boolean).filter(id => {
+      const a = db.prepare('SELECT visibility FROM articles WHERE id = ?').get(id);
+      if (!a || a.visibility !== 'groups') return false;
+      return db.prepare('SELECT COUNT(*) AS n FROM article_groups WHERE article_id = ?').get(id).n === 0;
+    });
+    if (blocked.length) {
+      return res.status(400).json({ error: `${blocked.length} group-restricted article(s) have no customer group selected — assign a group before publishing.` });
+    }
+  }
+  if (action === 'set-visibility' && sanitizeVisibility(visibility) === 'groups' && (!Array.isArray(group_ids) || !group_ids.length)) {
+    return res.status(400).json({ error: 'Choose at least one customer group for group-restricted visibility.' });
+  }
   const now = new Date().toISOString();
   let n = 0;
   const tx = db.transaction(() => {
@@ -826,7 +895,7 @@ function crudRoutes(base, table, fields) {
   });
 }
 
-crudRoutes('categories', 'categories', ['description', 'icon', 'color', 'parent_id', 'sort_order', 'visibility']);
+crudRoutes('categories', 'categories', ['description', 'icon', 'icon_image', 'color', 'parent_id', 'sort_order', 'visibility']);
 crudRoutes('services', 'services', ['description', 'icon', 'color', 'sort_order']);
 
 app.get('/api/admin/tags', requireAuth, (req, res) => {
@@ -1118,21 +1187,70 @@ app.post('/api/admin/upload', requireAuth, (req, res) => {
     if (err) return res.status(400).json({ error: err.message || 'Upload failed' });
     if (!req.file) return res.status(400).json({ error: 'No file received' });
     const db = getDb();
-    const id = db.prepare(`INSERT INTO attachments (article_id, original_name, stored_name, mime_type, size_bytes, uploaded_by, uploaded_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)`)
-      .run(req.body.article_id || null, req.file.originalname.slice(0, 200), req.file.filename,
-        req.file.mimetype, req.file.size, req.user.id, new Date().toISOString()).lastInsertRowid;
+    const out = insertAttachment(db, req.file, req.user.id, req.body.article_id || null);
     logActivity(db, req.user.id, 'upload', `Uploaded ${req.file.originalname}`);
-    res.json({ id, url: `/media/${req.file.filename}`, name: req.file.originalname });
+    res.json(out);
+  });
+});
+
+app.post('/api/admin/upload-multi', requireAuth, (req, res) => {
+  upload.array('files', 40)(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.message || 'Upload failed' });
+    if (!req.files || !req.files.length) return res.status(400).json({ error: 'No files received' });
+    const db = getDb();
+    const out = req.files.map(f => insertAttachment(db, f, req.user.id, req.body.article_id || null));
+    logActivity(db, req.user.id, 'upload', `Uploaded ${req.files.length} file(s)`);
+    res.json({ files: out });
   });
 });
 
 app.get('/api/admin/attachments', requireAuth, (req, res) => {
   const db = getDb();
+  const { q, kind, sort } = req.query;
+  const conds = [];
+  const params = [];
+  if (q) { conds.push('(a.original_name LIKE ? OR a.title LIKE ?)'); params.push(`%${q}%`, `%${q}%`); }
+  if (kind && ['image', 'video', 'audio', 'file'].includes(kind)) { conds.push('a.kind = ?'); params.push(kind); }
+  const where = conds.length ? 'WHERE ' + conds.join(' AND ') : '';
+  const order = sort === 'oldest' ? 'a.uploaded_at ASC'
+    : sort === 'name' ? 'a.original_name COLLATE NOCASE ASC'
+    : sort === 'size' ? 'a.size_bytes DESC' : 'a.uploaded_at DESC';
   res.json(db.prepare(`SELECT a.*, u.display_name AS uploaded_by_name, ar.title AS article_title
     FROM attachments a LEFT JOIN users u ON u.id = a.uploaded_by LEFT JOIN articles ar ON ar.id = a.article_id
-    ORDER BY a.uploaded_at DESC LIMIT 300`).all()
+    ${where} ORDER BY ${order} LIMIT 1000`).all(...params)
     .map(r => ({ ...r, url: `/media/${r.stored_name}` })));
+});
+
+app.put('/api/admin/attachments/:id', requireAuth, (req, res) => {
+  const db = getDb();
+  const b = req.body || {};
+  const sets = [];
+  const vals = [];
+  if (b.title !== undefined) { sets.push('title = ?'); vals.push(String(b.title).slice(0, 200)); }
+  if (b.alt_text !== undefined) { sets.push('alt_text = ?'); vals.push(String(b.alt_text).slice(0, 500)); }
+  if (b.caption !== undefined) { sets.push('caption = ?'); vals.push(String(b.caption).slice(0, 500)); }
+  if (b.article_id !== undefined) { sets.push('article_id = ?'); vals.push(b.article_id ? Number(b.article_id) : null); }
+  if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
+  vals.push(req.params.id);
+  const r = db.prepare(`UPDATE attachments SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+  if (!r.changes) return res.status(404).json({ error: 'Not found' });
+  res.json({ ok: true });
+});
+
+app.post('/api/admin/attachments/bulk-delete', requireAuth, (req, res) => {
+  const db = getDb();
+  const ids = (req.body && Array.isArray(req.body.ids) ? req.body.ids : []).map(Number).filter(Boolean);
+  if (!ids.length) return res.status(400).json({ error: 'No files selected' });
+  let n = 0;
+  for (const id of ids) {
+    const row = db.prepare('SELECT stored_name FROM attachments WHERE id = ?').get(id);
+    if (!row) continue;
+    db.prepare('DELETE FROM attachments WHERE id = ?').run(id);
+    try { fs.unlinkSync(path.join(UPLOAD_DIR, row.stored_name)); } catch {}
+    n++;
+  }
+  logActivity(db, req.user.id, 'upload_delete', `Deleted ${n} media file(s)`);
+  res.json({ ok: true, deleted: n });
 });
 
 app.delete('/api/admin/attachments/:id', requireAuth, (req, res) => {
@@ -1230,6 +1348,54 @@ app.post('/api/admin/import', requireAuth, (req, res) => {
   tx();
   logActivity(db, req.user.id, 'import', `Imported ${imported} article(s) as drafts`);
   res.json({ ok: true, imported });
+});
+
+/* ================= DEMO CONTENT MANAGER (admin) ================= */
+
+app.get('/api/admin/demo', requireAuth, (req, res) => {
+  res.json(demoLib.demoCounts(getDb()));
+});
+
+app.post('/api/admin/demo/remove', requireAuth, (req, res) => {
+  const db = getDb();
+  try {
+    const r = demoLib.removeDemo(db);
+    logActivity(db, req.user.id, 'demo_remove',
+      `Removed demo content: ${r.removed.articles} articles, ${r.removed.categories} categories, ${r.removed.services} services, ${r.removed.customers} customers, ${r.removed.groups} groups`);
+    res.json({ ok: true, ...r, counts: demoLib.demoCounts(db) });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.post('/api/admin/demo/restore', requireAuth, (req, res) => {
+  const db = getDb();
+  try {
+    const r = demoLib.restoreDemo(db);
+    logActivity(db, req.user.id, 'demo_restore',
+      `Restored demo content: ${r.articles} articles, ${r.categories} categories, ${r.services} services, ${r.customers} customers, ${r.groups} groups`);
+    res.json({ ok: true, restored: r, counts: demoLib.demoCounts(db) });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+/* ================= BOOKSTACK IMPORT (admin) =================
+   Credentials come from the request body and are used only for the run —
+   they are never written to the database or settings. */
+
+app.post('/api/admin/bookstack/test', requireAuth, async (req, res) => {
+  try {
+    res.json(await bookstack.testConnection(req.body || {}));
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.post('/api/admin/bookstack/import', requireAuth, (req, res) => {
+  try {
+    const job = bookstack.startImport(getDb(), req.body || {}, req.user.id);
+    res.json({ ok: true, job });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.get('/api/admin/bookstack/import/status', requireAuth, (req, res) => {
+  const job = bookstack.getImportJob(req.query.id ? String(req.query.id) : null);
+  res.json({ job: job ? bookstack.publicJob(job) : null });
 });
 
 /* ================= CLOUD BACKUP (admin) ================= */

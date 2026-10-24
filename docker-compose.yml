@@ -1,18 +1,15 @@
-name: xc-wiki
-
 services:
   xc-wiki:
     build: .
-    container_name: xc-wiki
     ports:
       - "${PORT:-3000}:3000"
-    # Copy .env.example to .env, or set the same vars in Coolify's UI.
-    env_file:
-      - .env
+    # Set these in your .env file (plain Compose) or in Coolify's
+    # Environment Variables UI — they are passed into the container here.
     environment:
       # App always listens on 3000 inside the container; ${PORT} above
       # controls the host-side port only.
       PORT: 3000
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?Set ENCRYPTION_KEY (openssl rand -hex 32) - it encrypts cloud-backup credentials and must never change once set}
     volumes:
       # SQLite database + uploads persist here across restarts/upgrades
       - xcwiki-data:/app/data

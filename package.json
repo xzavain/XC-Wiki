@@ -10,7 +10,7 @@
   },
   "description": "XC Wiki — knowledge base / wiki website system with reader portal, WYSIWYG HTML articles, revision history, customer groups with per-group visibility, cloud backup, and staff admin dashboard",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "license": "UNLICENSED",
   "main": "server.js",

@@ -2,7 +2,7 @@
 
 A knowledge base / wiki website system: a public reader portal (search, categories, services, article pages with table of contents, feedback, reading progress) plus a staff admin dashboard (WYSIWYG HTML editor, revision history with diff + rollback, categories/services/tags, media library, redirects, customer groups with per-group article visibility, cloud backup, user roles, feedback inbox, search analytics, import/export).
 
-Stack: **Node 20 + Express + better-sqlite3**, vanilla JS SPA. No build step — clone, `npm install`, `npm start`.
+Stack: **Node 22 + Express + better-sqlite3**, vanilla JS SPA. No build step — clone, `npm install`, `npm start`.
 
 ## Screenshots
 

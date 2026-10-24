@@ -17,6 +17,7 @@ const { hashPassword, verifyPassword, newToken, expiryFor } = require('./lib/aut
 const cloud = require('./lib/cloud');
 const demoLib = require('./lib/demo');
 const bookstack = require('./lib/bookstack');
+const mailer = require('./lib/mailer');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -107,6 +108,17 @@ app.get('/media/:name', (req, res) => {
   const name = String(req.params.name || '');
   if (!STORED_NAME_RE.test(name)) return res.status(404).json({ error: 'Not found' });
   const db = getDb();
+  /* Private wiki: media requires a signed-in viewer (staff or customer,
+     via Bearer header or the session cookie — article <img> tags ride the
+     cookie). Branding assets referenced by the public settings (site logo,
+     favicon, hero image) stay reachable so the login screen can show them. */
+  const viewer = resolveViewer(db, bearerToken(req));
+  if (!viewer) {
+    const s = getSettings(db);
+    const branding = [s.logo_url, s.favicon_url, s.hero_image_url].filter(Boolean)
+      .map(u => String(u).split('/').pop());
+    if (!branding.includes(name)) return res.status(401).json({ error: 'Not authenticated' });
+  }
   const row = db.prepare('SELECT stored_name, mime_type FROM attachments WHERE stored_name = ?').get(name);
   if (!row) return res.status(404).json({ error: 'Not found' });
   const filePath = path.join(UPLOAD_DIR, row.stored_name);
@@ -161,7 +173,24 @@ function resolveViewer(db, token) {
 
 function bearerToken(req) {
   const header = req.headers.authorization || '';
-  return header.startsWith('Bearer ') ? header.slice(7) : null;
+  if (header.startsWith('Bearer ')) return header.slice(7);
+  /* Session cookie fallback: set at sign-in so browser-native loads that
+     cannot send an Authorization header (article images, media files)
+     still authenticate under the login wall. */
+  const cookie = String(req.headers.cookie || '');
+  const m = cookie.match(/(?:^|;\s*)xcwiki_token=([^;]+)/);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+function setSessionCookie(req, res, token) {
+  const secure = String(req.headers['x-forwarded-proto'] || '').includes('https') || req.secure;
+  const parts = [`xcwiki_token=${encodeURIComponent(token)}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', `Max-Age=${30 * 24 * 3600}`];
+  if (secure) parts.push('Secure');
+  res.append('Set-Cookie', parts.join('; '));
+}
+
+function clearSessionCookie(res) {
+  res.append('Set-Cookie', 'xcwiki_token=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0');
 }
 
 /** Optional auth: populates req.viewer (staff | customer | null). Never 401s. */
@@ -246,6 +275,7 @@ app.post('/api/setup', (req, res) => {
   db.prepare('INSERT INTO auth_tokens (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)')
     .run(token, id, Date.now(), expiryFor(false));
   logActivity(db, id, 'setup', 'First admin account created');
+  setSessionCookie(req, res, token);
   res.json({ token, user: { id, email: String(email).trim().toLowerCase(), display_name: String(display_name || 'Admin'), role: 'admin', kind: 'staff' } });
 });
 
@@ -261,11 +291,13 @@ app.post('/api/auth/login', (req, res) => {
   db.prepare('INSERT INTO auth_tokens (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)')
     .run(token, user.id, Date.now(), expiryFor(false));
   logActivity(db, user.id, 'login', `${user.email} signed in`);
+  setSessionCookie(req, res, token);
   res.json({ token, user: { id: user.id, email: user.email, display_name: user.display_name, role: user.role, kind: 'staff' } });
 });
 
 app.post('/api/auth/logout', requireAuth, (req, res) => {
   getDb().prepare('DELETE FROM auth_tokens WHERE token = ?').run(req.token);
+  clearSessionCookie(res);
   res.json({ ok: true });
 });
 
@@ -294,6 +326,7 @@ app.post('/api/customer/login', (req, res) => {
     .run(token, cust.id, Date.now(), expiryFor(false));
   db.prepare('UPDATE customers SET last_login_at = ? WHERE id = ?').run(new Date().toISOString(), cust.id);
   const g = cust.group_id ? db.prepare('SELECT name FROM customer_groups WHERE id = ?').get(cust.group_id) : null;
+  setSessionCookie(req, res, token);
   res.json({ token, user: { id: cust.id, email: cust.email, name: cust.name, company: cust.company, group_id: cust.group_id, group_name: g?.name || '', kind: 'customer' } });
 });
 
@@ -301,6 +334,33 @@ app.post('/api/customer/logout', requireSignedIn, (req, res) => {
   const db = getDb();
   try { db.prepare('DELETE FROM customer_tokens WHERE token = ?').run(req.token); } catch {}
   try { db.prepare('DELETE FROM auth_tokens WHERE token = ?').run(req.token); } catch {}
+  clearSessionCookie(res);
+  res.json({ ok: true });
+});
+
+/* ---------------- Customer password setup (invite / reset links) ---------------- */
+
+app.get('/api/customer/set-password-info', (req, res) => {
+  const db = getDb();
+  const row = mailer.findPasswordToken(db, String(req.query.token || ''));
+  if (!row) return res.status(400).json({ error: 'This link is invalid or has expired. Ask your administrator for a new one.' });
+  const cust = db.prepare('SELECT email, name FROM customers WHERE id = ?').get(row.customer_id);
+  if (!cust) return res.status(400).json({ error: 'Account not found' });
+  res.json({ valid: true, email: cust.email, name: cust.name });
+});
+
+app.post('/api/customer/set-password', (req, res) => {
+  const db = getDb();
+  const { token, password } = req.body || {};
+  if (!password || String(password).length < 8) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters' });
+  }
+  const row = mailer.findPasswordToken(db, String(token || ''));
+  if (!row) return res.status(400).json({ error: 'This link is invalid or has expired. Ask your administrator for a new one.' });
+  db.prepare('UPDATE customers SET password_hash = ? WHERE id = ?').run(hashPassword(String(password)), row.customer_id);
+  db.prepare('UPDATE password_tokens SET used_at = ? WHERE id = ?').run(Date.now(), row.id);
+  /* A fresh password retires every existing session for the account. */
+  db.prepare('DELETE FROM customer_tokens WHERE customer_id = ?').run(row.customer_id);
   res.json({ ok: true });
 });
 
@@ -363,7 +423,7 @@ const ARTICLE_JOIN = `
 const ARTICLE_COLS = `a.*, c.name AS category_name, c.slug AS category_slug, c.icon AS category_icon, c.icon_image AS category_icon_image, c.cover_image AS category_cover_image, c.color AS category_color,
   s.name AS service_name, s.slug AS service_slug, s.icon AS service_icon`;
 
-app.get('/api/home', attachViewer, (req, res) => {
+app.get('/api/home', requireSignedIn, (req, res) => {
   const db = getDb();
   const pub = `a.status = 'published'`;
   const vis = visibilityClause(req.viewer);
@@ -399,7 +459,7 @@ function getVisibleArticle(db, slug, viewer) {
   return null;
 }
 
-app.get('/api/articles/:slug', attachViewer, (req, res) => {
+app.get('/api/articles/:slug', requireSignedIn, (req, res) => {
   const db = getDb();
   const found = getVisibleArticle(db, req.params.slug, req.viewer);
   // 404 either way: a forbidden article is indistinguishable from a missing one (no title leak)
@@ -445,10 +505,10 @@ app.get('/api/articles/:slug', attachViewer, (req, res) => {
   });
 });
 
-app.post('/api/articles/:id/feedback', attachViewer, (req, res) => {
+app.post('/api/articles/:id/feedback', requireSignedIn, (req, res) => {
   const db = getDb();
   const vis = visibilityClause(req.viewer);
-  const art = db.prepare(`SELECT a.id FROM articles a ${ARTICLE_JOIN} WHERE a.id = ? AND a.status = 'published' AND ${vis.clause}`)
+  const art = db.prepare(`SELECT a.id, a.title FROM articles a ${ARTICLE_JOIN} WHERE a.id = ? AND a.status = 'published' AND ${vis.clause}`)
     .get(req.params.id, ...vis.params);
   if (!art) return res.status(404).json({ error: 'Article not found' });
   const helpful = req.body && req.body.helpful ? 1 : 0;
@@ -456,6 +516,12 @@ app.post('/api/articles/:id/feedback', attachViewer, (req, res) => {
   db.prepare('INSERT INTO feedback (article_id, helpful, ip, created_at) VALUES (?, ?, ?, ?)')
     .run(art.id, helpful, ip, new Date().toISOString());
   db.prepare(`UPDATE articles SET ${helpful ? 'helpful_yes' : 'helpful_no'} = ${helpful ? 'helpful_yes' : 'helpful_no'} + 1 WHERE id = ?`).run(art.id);
+  /* Admin email alert (Admin → Settings → Email) — fire and forget so a
+     slow mail server never delays the reader's feedback. */
+  mailer.sendAdminAlert(db, 'email_alerts_feedback',
+    `New feedback on "${art.title}" — XC Wiki`,
+    `A reader marked the article "${art.title}" as ${helpful ? 'helpful' : 'NOT helpful'}.\n\nReview it in Admin → Feedback.`)
+    .catch(() => {});
   res.json({ ok: true });
 });
 
@@ -486,7 +552,7 @@ function searchArticles(db, q, viewer, limit = 20) {
   return scored.slice(0, limit).map(({ r, score }) => ({ ...articleCard(r), _score: Math.round(score) }));
 }
 
-app.get('/api/search', attachViewer, (req, res) => {
+app.get('/api/search', requireSignedIn, (req, res) => {
   const db = getDb();
   const q = String(req.query.q || '').trim().slice(0, 120);
   if (!q) return res.json({ query: q, results: [] });
@@ -501,7 +567,7 @@ app.get('/api/search', attachViewer, (req, res) => {
 
 /* ---------------- Public: taxonomies ---------------- */
 
-app.get('/api/categories', attachViewer, (req, res) => {
+app.get('/api/categories', requireSignedIn, (req, res) => {
   const db = getDb();
   const vis = visibilityClause(req.viewer);
   const catVis = categoryVisibilityWhere(req.viewer);
@@ -509,7 +575,7 @@ app.get('/api/categories', attachViewer, (req, res) => {
     FROM categories c WHERE ${catVis.clause} ORDER BY c.sort_order, c.name`).all(...vis.params));
 });
 
-app.get('/api/categories/:slug', attachViewer, (req, res) => {
+app.get('/api/categories/:slug', requireSignedIn, (req, res) => {
   const db = getDb();
   const catVis = categoryVisibilityWhere(req.viewer);
   const cat = db.prepare(`SELECT * FROM categories c WHERE c.slug = ? AND ${catVis.clause}`).get(req.params.slug);
@@ -520,11 +586,11 @@ app.get('/api/categories/:slug', attachViewer, (req, res) => {
   res.json({ category: cat, articles });
 });
 
-app.get('/api/services', (req, res) => {
+app.get('/api/services', requireSignedIn, (req, res) => {
   res.json(getDb().prepare('SELECT * FROM services ORDER BY sort_order, name').all());
 });
 
-app.get('/api/services/:slug', attachViewer, (req, res) => {
+app.get('/api/services/:slug', requireSignedIn, (req, res) => {
   const db = getDb();
   const svc = db.prepare('SELECT * FROM services WHERE slug = ?').get(req.params.slug);
   if (!svc) return res.status(404).json({ error: 'Not found' });
@@ -534,14 +600,14 @@ app.get('/api/services/:slug', attachViewer, (req, res) => {
   res.json({ service: svc, articles });
 });
 
-app.get('/api/tags', attachViewer, (req, res) => {
+app.get('/api/tags', requireSignedIn, (req, res) => {
   const db = getDb();
   const vis = visibilityClause(req.viewer);
   res.json(db.prepare(`SELECT t.*, (SELECT COUNT(*) FROM article_tags at JOIN articles a ON a.id = at.article_id ${ARTICLE_JOIN} WHERE at.tag_id = t.id AND a.status = 'published' AND ${vis.clause}) AS article_count
     FROM tags t ORDER BY t.name`).all(...vis.params));
 });
 
-app.get('/api/tags/:slug', attachViewer, (req, res) => {
+app.get('/api/tags/:slug', requireSignedIn, (req, res) => {
   const db = getDb();
   const tag = db.prepare('SELECT * FROM tags WHERE slug = ?').get(req.params.slug);
   if (!tag) return res.status(404).json({ error: 'Not found' });
@@ -554,7 +620,7 @@ app.get('/api/tags/:slug', attachViewer, (req, res) => {
 
 /* ---------------- Public: reading progress ---------------- */
 
-app.get('/api/progress', (req, res) => {
+app.get('/api/progress', requireSignedIn, (req, res) => {
   const db = getDb();
   const anon = String(req.query.anon_key || '').slice(0, 64);
   const rows = anon
@@ -565,7 +631,7 @@ app.get('/api/progress', (req, res) => {
   res.json({ progress: map });
 });
 
-app.post('/api/progress', (req, res) => {
+app.post('/api/progress', requireSignedIn, (req, res) => {
   const db = getDb();
   const { article_id, progress, anon_key } = req.body || {};
   const p = Math.max(0, Math.min(1, Number(progress) || 0));
@@ -1036,7 +1102,7 @@ app.get('/api/admin/customers', requireAuth, (req, res) => {
     ORDER BY c.name LIMIT 500`).all(...params));
 });
 
-app.post('/api/admin/customers', requireAuth, (req, res) => {
+app.post('/api/admin/customers', requireAuth, async (req, res) => {
   const db = getDb();
   const b = req.body || {};
   const email = String(b.email || '').trim().toLowerCase();
@@ -1050,10 +1116,66 @@ app.post('/api/admin/customers', requireAuth, (req, res) => {
         String(b.company || '').slice(0, 200), String(b.phone || '').slice(0, 60),
         String(b.notes || '').slice(0, 2000), b.group_id || null, new Date().toISOString()).lastInsertRowid;
     logActivity(db, req.user.id, 'customer_create', `Added customer ${email}`);
+    if (b.send_invite) {
+      /* The customer sets their own password from the emailed link; the
+         response also carries the link so the admin can hand it over
+         manually when SMTP is off or delivery fails. */
+      const invite = await mailer.sendCustomerInvite(db, req, { id, email, name: String(b.name).trim() });
+      return res.json({ id, invite });
+    }
     res.json({ id, temp_password: tempPassword });
   } catch {
     res.status(400).json({ error: 'That email is already registered' });
   }
+});
+
+/* Send (or resend) a password-setup invite; with { reset: true } it also
+   signs the customer out everywhere first. Always returns the link. */
+app.post('/api/admin/customers/:id/invite', requireAuth, async (req, res) => {
+  const db = getDb();
+  const cust = db.prepare('SELECT id, email, name FROM customers WHERE id = ?').get(req.params.id);
+  if (!cust) return res.status(404).json({ error: 'Customer not found' });
+  const reset = !!(req.body && req.body.reset);
+  if (reset) db.prepare('DELETE FROM customer_tokens WHERE customer_id = ?').run(cust.id);
+  const r = await mailer.sendCustomerInvite(db, req, cust, { reset });
+  logActivity(db, req.user.id, reset ? 'customer_reset_password' : 'customer_invite',
+    `${reset ? 'Password reset' : 'Password setup invite'} for ${cust.email} (emailed: ${r.emailed})`);
+  res.json({ ok: true, ...r });
+});
+
+/* Batch customer management: invite / reset-password / disable / enable / delete. */
+app.post('/api/admin/customers/bulk-action', requireAuth, async (req, res) => {
+  const db = getDb();
+  const { ids, action } = req.body || {};
+  const ACTIONS = ['invite', 'reset-password', 'disable', 'enable', 'delete'];
+  if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ error: 'No customers selected' });
+  if (!ACTIONS.includes(action)) return res.status(400).json({ error: 'Unknown action' });
+  const results = [];
+  for (const id of ids.map(Number).filter(Boolean)) {
+    const cust = db.prepare('SELECT id, email, name FROM customers WHERE id = ?').get(id);
+    if (!cust) { results.push({ id, ok: false, error: 'Not found' }); continue; }
+    if (action === 'invite' || action === 'reset-password') {
+      const reset = action === 'reset-password';
+      if (reset) db.prepare('DELETE FROM customer_tokens WHERE customer_id = ?').run(id);
+      const r = await mailer.sendCustomerInvite(db, req, cust, { reset });
+      results.push({ id, email: cust.email, ok: true, emailed: r.emailed, link: r.link });
+    } else if (action === 'disable') {
+      db.prepare('UPDATE customers SET disabled = 1 WHERE id = ?').run(id);
+      db.prepare('DELETE FROM customer_tokens WHERE customer_id = ?').run(id);
+      results.push({ id, email: cust.email, ok: true });
+    } else if (action === 'enable') {
+      db.prepare('UPDATE customers SET disabled = 0 WHERE id = ?').run(id);
+      results.push({ id, email: cust.email, ok: true });
+    } else if (action === 'delete') {
+      db.prepare('DELETE FROM password_tokens WHERE customer_id = ?').run(id);
+      db.prepare('DELETE FROM customer_tokens WHERE customer_id = ?').run(id);
+      db.prepare('DELETE FROM customers WHERE id = ?').run(id);
+      results.push({ id, email: cust.email, ok: true });
+    }
+  }
+  const affected = results.filter(r => r.ok).length;
+  logActivity(db, req.user.id, 'customer_bulk_action', `${action} on ${affected} customer(s)`);
+  res.json({ ok: true, affected, results });
 });
 
 app.put('/api/admin/customers/:id', requireAuth, (req, res) => {
@@ -1137,10 +1259,12 @@ function parseCsv(text) {
   return rows.filter(r => r.length > 1 || (r.length === 1 && r[0].trim() !== ''));
 }
 
-/** CSV import with column mapping. Body: { csv, mapping: {name, email, company, phone, notes}, group_id, default_password?, skip_header? } */
-app.post('/api/admin/customers/import', requireAuth, (req, res) => {
+/** CSV import with column mapping. Body: { csv, mapping: {name, email, company, phone, notes, group}, group_id, default_password?, skip_header?, send_invites? }
+    A "group" column names the customer's group per row (created when it
+    doesn't exist yet) and wins over the single group_id for that row. */
+app.post('/api/admin/customers/import', requireAuth, async (req, res) => {
   const db = getDb();
-  const { csv, mapping, group_id, default_password, skip_header } = req.body || {};
+  const { csv, mapping, group_id, default_password, skip_header, send_invites } = req.body || {};
   const map = mapping || {};
   const rows = parseCsv(csv);
   if (!rows.length) return res.status(400).json({ error: 'No rows found in the CSV' });
@@ -1156,6 +1280,25 @@ app.post('/api/admin/customers/import', requireAuth, (req, res) => {
   const defPw = default_password && String(default_password).length >= 8 ? String(default_password) : randomPassword();
   const imported = [];
   const errors = [];
+  const groupsCreated = [];
+  const groupCache = new Map();
+  const resolveGroup = (name) => {
+    const key = name.toLowerCase();
+    if (groupCache.has(key)) return groupCache.get(key);
+    let g = db.prepare('SELECT id FROM customer_groups WHERE LOWER(name) = ?').get(key);
+    if (!g) {
+      let slug = slugify(name) || 'group';
+      let candidate = slug;
+      let n = 2;
+      while (db.prepare('SELECT id FROM customer_groups WHERE slug = ?').get(candidate)) candidate = `${slug}-${n++}`;
+      const id = db.prepare('INSERT INTO customer_groups (name, slug, color, description, created_at) VALUES (?, ?, ?, ?, ?)')
+        .run(name.slice(0, 120), candidate, '#8B5CF6', '', new Date().toISOString()).lastInsertRowid;
+      g = { id };
+      groupsCreated.push(name);
+    }
+    groupCache.set(key, g.id);
+    return g.id;
+  };
   const tx = db.transaction(() => {
     dataRows.forEach((r, i) => {
       const lineNo = i + (skip_header === false ? 1 : 2);
@@ -1163,12 +1306,14 @@ app.post('/api/admin/customers/import', requireAuth, (req, res) => {
       const email = col(r, 'email').toLowerCase();
       if (!name) { errors.push({ row: lineNo, error: 'Missing name' }); return; }
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { errors.push({ row: lineNo, error: `Invalid email "${col(r, 'email')}"` }); return; }
+      const groupName = col(r, 'group');
+      const rowGroup = groupName ? resolveGroup(groupName) : gid;
       try {
         const id = db.prepare(`INSERT INTO customers (name, email, password_hash, company, phone, notes, group_id, created_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
           .run(name.slice(0, 200), email, hashPassword(defPw),
             col(r, 'company').slice(0, 200), col(r, 'phone').slice(0, 60), col(r, 'notes').slice(0, 2000),
-            gid, new Date().toISOString()).lastInsertRowid;
+            rowGroup, new Date().toISOString()).lastInsertRowid;
         imported.push({ id, name, email });
       } catch {
         errors.push({ row: lineNo, error: `Duplicate email "${email}"` });
@@ -1177,7 +1322,17 @@ app.post('/api/admin/customers/import', requireAuth, (req, res) => {
   });
   tx();
   logActivity(db, req.user.id, 'customer_import', `Imported ${imported.length} customer(s), ${errors.length} error(s)`);
-  res.json({ ok: true, imported: imported.length, customers: imported, errors, default_password: defPw });
+  const out = { ok: true, imported: imported.length, customers: imported, errors, default_password: defPw, groups_created: groupsCreated };
+  if (send_invites) {
+    /* Each imported customer gets a password-setup link (emailed when SMTP
+       is configured; the links are returned either way for the admin). */
+    out.invites = [];
+    for (const c of imported) {
+      const r = await mailer.sendCustomerInvite(db, req, c);
+      out.invites.push({ email: c.email, emailed: r.emailed, link: r.link });
+    }
+  }
+  res.json(out);
 });
 
 /* ---- Attachments / media library ---- */
@@ -1274,6 +1429,52 @@ app.put('/api/admin/settings', requireAuth, (req, res) => {
   const s = setSettings(db, body);
   logActivity(db, req.user.id, 'settings', 'Updated site settings');
   res.json(s);
+});
+
+/* ---- Email (SMTP) settings ---- */
+
+app.get('/api/admin/email-settings', requireAuth, (req, res) => {
+  res.json(mailer.emailSettingsView(getDb()));
+});
+
+app.put('/api/admin/email-settings', requireAuth, (req, res) => {
+  const db = getDb();
+  const b = req.body || {};
+  const next = {};
+  if (b.site_url !== undefined) next.site_url = String(b.site_url).trim().slice(0, 300);
+  if (b.smtp_host !== undefined) next.smtp_host = String(b.smtp_host).trim().slice(0, 200);
+  if (b.smtp_port !== undefined) {
+    const p = Number(b.smtp_port);
+    if (!Number.isFinite(p) || p < 1 || p > 65535) return res.status(400).json({ error: 'SMTP port must be between 1 and 65535' });
+    next.smtp_port = String(Math.round(p));
+  }
+  if (b.smtp_secure !== undefined) {
+    if (!['tls', 'starttls', 'none'].includes(b.smtp_secure)) return res.status(400).json({ error: 'Encryption must be tls, starttls or none' });
+    next.smtp_secure = b.smtp_secure;
+  }
+  if (b.smtp_user !== undefined) next.smtp_user = String(b.smtp_user).trim().slice(0, 200);
+  if (b.smtp_from_name !== undefined) next.smtp_from_name = String(b.smtp_from_name).trim().slice(0, 120);
+  if (b.smtp_from_email !== undefined) {
+    const em = String(b.smtp_from_email).trim();
+    if (em && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)) return res.status(400).json({ error: 'From email is not a valid address' });
+    next.smtp_from_email = em;
+  }
+  if (b.email_alerts_feedback !== undefined) next.email_alerts_feedback = b.email_alerts_feedback ? '1' : '0';
+  if (b.clear_smtp_pass) next.smtp_pass_enc = '';
+  else if (b.smtp_pass) next.smtp_pass_enc = mailer.setSmtpPassword(getSettings(db), String(b.smtp_pass));
+  setSettings(db, next);
+  logActivity(db, req.user.id, 'email_settings', 'Updated email (SMTP) settings');
+  res.json(mailer.emailSettingsView(db));
+});
+
+app.post('/api/admin/email-test', requireAuth, async (req, res) => {
+  try {
+    const to = (req.body && req.body.to) || req.user.email;
+    await mailer.sendTestEmail(getDb(), to);
+    res.json({ ok: true, to });
+  } catch (e) {
+    res.status(400).json({ error: String(e && e.message || e) });
+  }
 });
 
 /* ---- Feedback inbox & search analytics ---- */

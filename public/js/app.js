@@ -42,6 +42,8 @@ async function api(path, opts = {}) {
   if (res.status === 401 && App.token) {
     App.token = ''; store.remove('xcwiki_token'); App.user = null;
     renderUserArea();
+    /* Login wall: an expired session goes back to the sign-in screen. */
+    if (!/^#\/(login|customer-login|setup|set-password)/.test(location.hash)) location.hash = '#/customer-login';
   }
   let data = null;
   try { data = await res.json(); } catch {}
@@ -571,11 +573,39 @@ async function viewSetup() {
   };
 }
 
-function viewLogin() {
+async function viewLogin() {
   const app = document.getElementById('app');
+  /* First run: no staff account exists yet, so the staff login page IS the
+     setup page — the installer creates the administrator account here. */
+  let needed = App.setupNeeded;
+  if (needed === undefined) {
+    try { needed = (await api('/api/setup-needed')).needed; App.setupNeeded = needed; } catch { needed = false; }
+  }
+  if (needed) {
+    app.innerHTML = `<div class="auth-wrap"><div class="auth-card">
+    <h1>🚀 Welcome to XC Wiki</h1>
+    <p class="sub">This wiki hasn't been set up yet. Create the first administrator account to get started — you'll sign in with it from then on.</p>
+    <form id="setup-form">
+      <label class="fld"><span>Display name</span><input name="display_name" required></label>
+      <label class="fld"><span>Email</span><input name="email" type="email" required></label>
+      <label class="fld"><span>Password (8+ characters)</span><input name="password" type="password" minlength="8" required></label>
+      <button class="btn" style="width:100%;margin-top:8px">Create admin account</button>
+      <p class="form-error" id="setup-err" style="color:var(--red);font-size:.82rem"></p>
+    </form></div></div>`;
+    document.getElementById('setup-form').onsubmit = async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      try {
+        const d = await api('/api/setup', { method: 'POST', body: JSON.stringify(Object.fromEntries(fd)) });
+        App.token = d.token; store.set('xcwiki_token', d.token); App.user = d.user; App.setupNeeded = false;
+        renderUserArea(); toast('Admin account created', 'ok'); location.hash = '#/admin';
+      } catch (err) { document.getElementById('setup-err').textContent = err.message; }
+    };
+    return;
+  }
   app.innerHTML = `<div class="auth-wrap"><div class="auth-card">
     <h1>Staff Login</h1>
-    <p class="sub">Editors and admins sign in here. Readers don't need an account.</p>
+    <p class="sub">Editors and admins sign in here. This is a private wiki — customers use the <a href="#/customer-login">customer sign-in</a> with their own accounts.</p>
     <form id="login-form">
       <label class="fld"><span>Email</span><input name="email" type="email" required></label>
       <label class="fld"><span>Password</span><input name="password" type="password" required></label>
@@ -598,13 +628,15 @@ function viewCustomerLogin() {
   if (App.user && App.user.kind === 'customer') { location.hash = '#/account'; return; }
   app.innerHTML = `<div class="auth-wrap"><div class="auth-card">
     <h1>Customer Login</h1>
-    <p class="sub">Sign in to access guides shared with your account.</p>
+    <p class="sub">This is a private wiki. Sign in with the account your administrator invited you with — check your email for the password-setup link if it's your first time.</p>
     <form id="clogin-form">
       <label class="fld"><span>Email</span><input name="email" type="email" required></label>
       <label class="fld"><span>Password</span><input name="password" type="password" required></label>
       <button class="btn" style="width:100%;margin-top:8px">Sign in</button>
       <p id="clogin-err" style="color:var(--red);font-size:.82rem"></p>
-    </form></div></div>`;
+    </form>
+    <p class="sub" style="margin-top:14px">Staff? <a href="#/login">Sign in here →</a></p>
+    </div></div>`;
   document.getElementById('clogin-form').onsubmit = async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
@@ -613,6 +645,45 @@ function viewCustomerLogin() {
       App.token = d.token; store.set('xcwiki_token', d.token); App.user = d.user;
       renderUserArea(); toast('Signed in', 'ok'); location.hash = '#/';
     } catch (err) { document.getElementById('clogin-err').textContent = err.message; }
+  };
+}
+
+async function viewSetPassword(token) {
+  const app = document.getElementById('app');
+  if (!token) {
+    app.innerHTML = `<div class="auth-wrap"><div class="auth-card"><h1>Set your password</h1>
+      <p class="sub">This link is missing its security token. Ask your administrator to send you a new password-setup link.</p></div></div>`;
+    return;
+  }
+  let info = null;
+  try { info = await api('/api/customer/set-password-info?token=' + encodeURIComponent(token)); } catch (e) {
+    app.innerHTML = `<div class="auth-wrap"><div class="auth-card"><h1>Set your password</h1>
+      <p class="sub">${esc(e.message)}</p>
+      <p class="sub"><a href="#/customer-login">← Back to sign in</a></p></div></div>`;
+    return;
+  }
+  app.innerHTML = `<div class="auth-wrap"><div class="auth-card">
+    <h1>Set your password</h1>
+    <p class="sub">Welcome${info.name ? ' ' + esc(info.name) : ''} — choose a password for <strong>${esc(info.email)}</strong> to finish setting up your account.</p>
+    <form id="setpw-form">
+      <label class="fld"><span>New password (8+ characters)</span><input name="password" type="password" minlength="8" required></label>
+      <label class="fld"><span>Confirm password</span><input name="confirm" type="password" minlength="8" required></label>
+      <button class="btn" style="width:100%;margin-top:8px">Set password &amp; continue</button>
+      <p id="setpw-err" style="color:var(--red);font-size:.82rem"></p>
+    </form></div></div>`;
+  document.getElementById('setpw-form').onsubmit = async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const pw = String(fd.get('password') || '');
+    if (pw !== String(fd.get('confirm') || '')) {
+      document.getElementById('setpw-err').textContent = 'The two passwords do not match.';
+      return;
+    }
+    try {
+      await api('/api/customer/set-password', { method: 'POST', body: JSON.stringify({ token, password: pw }) });
+      toast('Password set — sign in to continue', 'ok');
+      location.hash = '#/customer-login';
+    } catch (err) { document.getElementById('setpw-err').textContent = err.message; }
   };
 }
 
@@ -666,7 +737,15 @@ async function route() {
   window.scrollTo(0, 0);
   document.getElementById('search-modal').classList.add('hidden');
   const hash = location.hash || '#/';
-  const parts = hash.replace(/^#\//, '').split('/');
+  const [pathOnly, queryOnly] = hash.replace(/^#\//, '').split('?');
+  const parts = pathOnly.split('/');
+  const query = new URLSearchParams(queryOnly || '');
+  /* Login wall: this wiki is private. Signed-out visitors only ever reach
+     the sign-in screens (and first-run setup / password-setup links). */
+  if (!App.user) {
+    if (App.setupNeeded && parts[0] !== 'login' && parts[0] !== 'setup') { location.hash = '#/login'; return; }
+    if (!App.setupNeeded && !['login', 'customer-login', 'setup', 'set-password'].includes(parts[0])) { location.hash = '#/customer-login'; return; }
+  }
   const app = document.getElementById('app');
   try {
     if (parts[0] === '' ) { document.title = 'XC Wiki Knowledge Base'; setActiveNav('overview'); await viewHome(); }
@@ -678,8 +757,9 @@ async function route() {
     else if (parts[0] === 'popular' || parts[0] === 'recent') { setActiveNav(''); await viewArticleListPage(parts[0]); }
     else if (parts[0] === 'search' && parts[1]) { setActiveNav(''); await viewSearchPage(decodeURIComponent(parts.slice(1).join('/'))); }
     else if (parts[0] === 'setup') { setActiveNav(''); await viewSetup(); }
-    else if (parts[0] === 'login') { setActiveNav(''); viewLogin(); }
+    else if (parts[0] === 'login') { setActiveNav(''); await viewLogin(); }
     else if (parts[0] === 'customer-login') { setActiveNav(''); viewCustomerLogin(); }
+    else if (parts[0] === 'set-password') { setActiveNav(''); await viewSetPassword(query.get('token') || ''); }
     else if (parts[0] === 'account') { setActiveNav(''); await viewAccount(); }
     else if (parts[0] === 'admin') {
       setActiveNav('');
@@ -725,7 +805,8 @@ async function boot() {
 
   window.addEventListener('hashchange', route);
   const { needed } = setupNeeded;
-  if (needed && !location.hash) location.hash = '#/setup';
+  App.setupNeeded = needed;
+  if (needed && !location.hash) location.hash = '#/login';
   await route();
 }
 

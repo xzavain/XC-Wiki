@@ -814,6 +814,11 @@ const AdminView = {
         <span id="c-bulkcount" style="font-size:.85rem;color:var(--muted)"></span>
         <select id="c-bulkgroup" style="max-width:180px"><option value="">Remove from group</option>${this.groups.map(g => `<option value="${g.id}">${esc(g.name)}</option>`).join('')}</select>
         <button class="btn ghost small" id="c-bulkgo">Assign group</button>
+        <button class="btn ghost small" data-cbulk="invite">✉ Send setup email</button>
+        <button class="btn ghost small" data-cbulk="reset-password">↺ Reset passwords</button>
+        <button class="btn ghost small" data-cbulk="disable">Disable</button>
+        <button class="btn ghost small" data-cbulk="enable">Enable</button>
+        <button class="btn danger small" data-cbulk="delete">Delete</button>
       </div>
       <div style="overflow-x:auto"><table class="tbl"><thead><tr>
         <th><input type="checkbox" id="c-selall"></th><th>Name</th><th>Email</th><th>Group</th><th>Status</th><th>Last login</th><th></th>
@@ -837,10 +842,31 @@ const AdminView = {
           <td>${c.group_name ? `<span class="pill" style="background:${esc(c.group_color || '#8B5CF6')}22;color:${esc(c.group_color || '#8B5CF6')}">${esc(c.group_name)}</span>` : '<span style="color:var(--muted2)">—</span>'}</td>
           <td>${c.disabled ? '<span class="pill archived">disabled</span>' : '<span class="pill published">active</span>'}</td>
           <td style="white-space:nowrap">${c.last_login_at ? timeAgo(c.last_login_at) : '<span style="color:var(--muted2)">never</span>'}</td>
-          <td style="white-space:nowrap"><button class="link-btn" data-cedit="${c.id}">Edit</button> ·
+          <td style="white-space:nowrap"><button class="link-btn" data-cinv="${c.id}">🔗 Setup link</button> ·
+          <button class="link-btn" data-cedit="${c.id}">Edit</button> ·
           <button class="link-btn" data-cdis="${c.id}">${c.disabled ? 'Enable' : 'Disable'}</button> ·
           <button class="link-btn" data-cdel="${c.id}" style="color:var(--red)">Delete</button></td>
         </tr>`).join('') || '<tr><td colspan="7" class="empty">No customers.</td></tr>';
+      tb.querySelectorAll('[data-cinv]').forEach(b => b.onclick = async () => {
+        const row = rows.find(r => String(r.id) === b.dataset.cinv);
+        try {
+          const r = await api('/api/admin/customers/' + b.dataset.cinv + '/invite', { method: 'POST', body: JSON.stringify({}) });
+          openModal(`<div style="padding:20px;max-width:560px">
+            <h3 style="margin-top:0">🔗 Password setup link</h3>
+            <p style="color:var(--muted);font-size:.88rem">${r.emailed
+              ? `✉ Emailed to <strong>${esc(row.email)}</strong> — the link works for 72 hours. You can also share it manually:`
+              : `Email was not sent (${esc(r.reason === 'smtp-not-configured' ? 'SMTP is not configured in Settings → Email' : 'delivery failed')}). Give <strong>${esc(row.email)}</strong> this link — it works for 72 hours:`}</p>
+            <label class="fld"><span>Setup link</span><input id="inv-link" readonly value="${esc(r.link)}"></label>
+            <div style="display:flex;gap:8px;margin-top:10px"><button class="btn small" id="inv-copy">Copy link</button><button class="btn ghost small" id="inv-close">Close</button></div>
+          </div>`);
+          document.getElementById('inv-copy').onclick = async () => {
+            const inp = document.getElementById('inv-link');
+            inp.select();
+            try { await navigator.clipboard.writeText(inp.value); toast('Link copied', 'ok'); } catch { document.execCommand('copy'); }
+          };
+          document.getElementById('inv-close').onclick = () => closeModal();
+        } catch (e) { toast(e.message, 'err'); }
+      });
       tb.querySelectorAll('[data-cedit]').forEach(b => b.onclick = () => this.customerForm(main, rows.find(r => String(r.id) === b.dataset.cedit), load));
       tb.querySelectorAll('[data-cdis]').forEach(b => b.onclick = async () => {
         const row = rows.find(r => String(r.id) === b.dataset.cdis);
@@ -872,6 +898,26 @@ const AdminView = {
       const r = await api('/api/admin/customers/bulk-assign', { method: 'POST', body: JSON.stringify({ ids, group_id }) });
       toast(`${r.affected} customer(s) assigned`, 'ok'); load();
     };
+    main.querySelectorAll('[data-cbulk]').forEach(b => b.onclick = async () => {
+      const ids = [...document.querySelectorAll('.c-sel:checked')].map(c => Number(c.value));
+      if (!ids.length) return;
+      const action = b.dataset.cbulk;
+      const labels = { invite: 'send password-setup emails to', 'reset-password': 'reset passwords for', disable: 'disable', enable: 'enable', delete: 'DELETE' };
+      if (!confirm(`${labels[action]} ${ids.length} selected customer(s)?`)) return;
+      try {
+        const r = await api('/api/admin/customers/bulk-action', { method: 'POST', body: JSON.stringify({ ids, action }) });
+        if ((action === 'invite' || action === 'reset-password') && r.results.some(x => x.link && !x.emailed)) {
+          const list = r.results.filter(x => x.link).map(x => `${x.email} — ${x.emailed ? '✉ emailed' : '🔗 ' + x.link}`).join('\n');
+          openModal(`<div style="padding:20px;max-width:640px"><h3 style="margin-top:0">Password setup links</h3>
+            <p style="color:var(--muted);font-size:.88rem">${r.affected} processed. Links marked 🔗 were not emailed (SMTP off or delivery failed) — share them manually; each works for 72 hours.</p>
+            <textarea readonly rows="8" style="width:100%">${esc(list)}</textarea>
+            <div style="margin-top:10px"><button class="btn small" onclick="closeModal()">Done</button></div></div>`);
+        } else {
+          toast(`${r.affected} customer(s) updated`, 'ok');
+        }
+        load();
+      } catch (e) { toast(e.message, 'err'); }
+    });
     await load();
   },
 
@@ -890,10 +936,21 @@ const AdminView = {
       </div>
       <label class="fld"><span>Notes (staff only)</span><textarea id="cf-notes" rows="2">${esc(c?.notes || '')}</textarea></label>
       <label class="fld"><span>${c ? 'Reset password (blank = keep current)' : 'Password (blank = auto-generated, shown once)'}</span><input id="cf-pass" type="text" placeholder="${c ? '—' : 'auto-generate'}"></label>
+      ${c ? '<div style="margin-top:6px"><button class="btn ghost small" id="cf-resetlink" type="button">✉ Email a password reset link</button> <span style="color:var(--muted);font-size:.8rem">They set a new password themselves; their sessions are signed out.</span></div>'
+          : '<label class="check-row" style="margin-top:6px"><input type="checkbox" id="cf-invite" checked> ✉ Email them a link to set their own password (recommended — no password needed above)</label>'}
       <div id="cf-pwout"></div>
       <div style="display:flex;gap:8px;margin-top:8px"><button class="btn small" id="cf-save">Save</button><button class="btn ghost small" id="cf-cancel">Cancel</button></div>
       </div>`;
     document.getElementById('cf-cancel').onclick = () => { box.innerHTML = ''; };
+    const resetBtn = document.getElementById('cf-resetlink');
+    if (resetBtn) resetBtn.onclick = async () => {
+      try {
+        const r = await api('/api/admin/customers/' + c.id + '/invite', { method: 'POST', body: JSON.stringify({ reset: true }) });
+        document.getElementById('cf-pwout').innerHTML = r.emailed
+          ? '<p class="pw-once">✉ Password reset link emailed (valid 72 hours). Their existing sessions were signed out.</p>'
+          : `<p class="pw-once">🔗 Email not sent — share this reset link manually (valid 72 hours):<br><code style="word-break:break-all">${esc(r.link)}</code></p>`;
+      } catch (e) { toast(e.message, 'err'); }
+    };
     document.getElementById('cf-save').onclick = async () => {
       const payload = {
         name: document.getElementById('cf-name').value,
@@ -905,6 +962,8 @@ const AdminView = {
       };
       const pw = document.getElementById('cf-pass').value;
       if (pw) payload.password = pw;
+      const inviteEl = document.getElementById('cf-invite');
+      if (!c && inviteEl && inviteEl.checked) payload.send_invite = true;
       try {
         if (c) {
           const r = await api('/api/admin/customers/' + c.id, { method: 'PUT', body: JSON.stringify(payload) });
@@ -912,8 +971,15 @@ const AdminView = {
           else { toast('Saved', 'ok'); box.innerHTML = ''; reload(); }
         } else {
           const r = await api('/api/admin/customers', { method: 'POST', body: JSON.stringify(payload) });
-          document.getElementById('cf-pwout').innerHTML = `<p class="pw-once">🔑 Login password (copy now — shown once): <code>${esc(r.temp_password)}</code></p>
+          if (r.invite) {
+            document.getElementById('cf-pwout').innerHTML = (r.invite.emailed
+              ? '<p class="pw-once">✉ Password setup link emailed — they set their own password from it (valid 72 hours).</p>'
+              : `<p class="pw-once">🔗 Email not sent (${r.invite.reason === 'smtp-not-configured' ? 'SMTP is not configured — Settings → Email' : 'delivery failed'}). Share this setup link manually (valid 72 hours):<br><code style="word-break:break-all">${esc(r.invite.link)}</code></p>`)
+              + '<div style="display:flex;gap:8px"><button class="btn small" id="cf-done">Done</button></div>';
+          } else {
+            document.getElementById('cf-pwout').innerHTML = `<p class="pw-once">🔑 Login password (copy now — shown once): <code>${esc(r.temp_password)}</code></p>
             <div style="display:flex;gap:8px"><button class="btn small" id="cf-done">Done</button></div>`;
+          }
           document.getElementById('cf-done').onclick = () => { box.innerHTML = ''; reload(); };
         }
         toast('Saved', 'ok'); reload();
@@ -931,12 +997,21 @@ const AdminView = {
         <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
           <label class="btn ghost small" style="cursor:pointer">Choose file<input type="file" id="ci-file" accept=".csv,text/csv" style="display:none"></label>
           <label class="check-row" style="margin:0"><input type="checkbox" id="ci-header" checked> First row is a header</label>
+          <button class="btn ghost small" id="ci-template" type="button">⬇ Template CSV</button>
           <button class="btn small" id="ci-next">Next: map columns →</button>
         </div>
       </div>
       <div id="ci-step2" style="display:none"></div>
       <div id="ci-step3" style="display:none"></div>
     </div>`);
+    document.getElementById('ci-template').onclick = () => {
+      const csv = 'name,email,company,phone,group,notes\nPriya Sharma,priya@example.com,Sharma Media Co.,555-0100,Premium,Imported from spreadsheet\n';
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+      a.download = 'xc-wiki-customers-template.csv';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    };
     document.getElementById('ci-file').onchange = async (e) => {
       const f = e.target.files[0];
       if (f) document.getElementById('ci-csv').value = await f.text();
@@ -964,7 +1039,7 @@ const AdminView = {
       const header = hasHeader ? rows[0] : rows[0].map((_, i) => 'Column ' + (i + 1));
       const dataRows = hasHeader ? rows.slice(1) : rows;
       const nCols = Math.max(...rows.map(r => r.length));
-      const fields = [['name', 'Full name *'], ['email', 'Email *'], ['company', 'Company'], ['phone', 'Phone'], ['notes', 'Notes']];
+      const fields = [['name', 'Full name *'], ['email', 'Email *'], ['company', 'Company'], ['phone', 'Phone'], ['group', 'Group (by name)'], ['notes', 'Notes']];
       // auto-guess mapping from header names
       const guess = {};
       header.forEach((h, i) => {
@@ -983,9 +1058,10 @@ const AdminView = {
           <label class="fld"><span>${label}</span><select data-map="${key}"><option value="-1">— ignore —</option>${colOpts(guess[key])}</select></label>`).join('')}
         </div>
         <div class="form-row3">
-          <label class="fld"><span>Add to group</span><select id="ci-group"><option value="">No group</option>${this.groups.map(g => `<option value="${g.id}">${esc(g.name)}</option>`).join('')}</select></label>
+          <label class="fld"><span>Add all to group (the Group column wins per row)</span><select id="ci-group"><option value="">No group</option>${this.groups.map(g => `<option value="${g.id}">${esc(g.name)}</option>`).join('')}</select></label>
           <label class="fld"><span>Default password (blank = auto)</span><input id="ci-pass" type="text" placeholder="auto-generate"></label>
         </div>
+        <label class="check-row"><input type="checkbox" id="ci-invites"> ✉ Email each imported customer a password-setup link so they set their own password</label>
         <h4>Preview (first 5 rows)</h4>
         <div style="overflow-x:auto"><table class="tbl"><thead><tr>${fields.map(([k, l]) => `<th>${l}</th>`).join('')}</tr></thead>
         <tbody id="ci-prev"></tbody></table></div>
@@ -1013,6 +1089,7 @@ const AdminView = {
               mapping,
               group_id: document.getElementById('ci-group').value || null,
               default_password: document.getElementById('ci-pass').value || undefined,
+              send_invites: document.getElementById('ci-invites').checked,
               skip_header: !hasHeader,
             }),
           });
@@ -1020,7 +1097,11 @@ const AdminView = {
           s2.style.display = 'none'; s3.style.display = '';
           s3.innerHTML = `
             <h4>✅ Imported ${r.imported} customer(s)</h4>
-            ${r.default_password ? `<p class="pw-once">🔑 Default password for imported customers (copy now): <code>${esc(r.default_password)}</code></p>` : ''}
+            ${r.groups_created && r.groups_created.length ? `<p style="color:var(--muted);font-size:.88rem">New groups created: ${r.groups_created.map(g => esc(g)).join(', ')}</p>` : ''}
+            ${r.invites && r.invites.length ? `<h4>Password setup links</h4>
+              <div style="max-height:200px;overflow:auto"><table class="tbl"><thead><tr><th>Email</th><th>Delivery</th></tr></thead>
+              <tbody>${r.invites.map(v => `<tr><td>${esc(v.email)}</td><td>${v.emailed ? '✉ Emailed' : `🔗 <code style="word-break:break-all;font-size:.75rem">${esc(v.link)}</code>`}</td></tr>`).join('')}</tbody></table></div>` : ''}
+            ${r.default_password && !r.invites ? `<p class="pw-once">🔑 Default password for imported customers (copy now): <code>${esc(r.default_password)}</code></p>` : ''}
             ${r.errors.length ? `<h4 style="color:var(--red)">⚠️ ${r.errors.length} row(s) skipped</h4>
               <div style="max-height:180px;overflow:auto"><table class="tbl"><thead><tr><th>Row</th><th>Error</th></tr></thead>
               <tbody>${r.errors.map(e => `<tr><td>${e.row}</td><td>${esc(e.error)}</td></tr>`).join('')}</tbody></table></div>` : ''}
@@ -1746,6 +1827,30 @@ const AdminView = {
           <button class="btn ghost small" id="s-export">⬇ Export JSON</button>
           <label class="btn ghost small" style="cursor:pointer">⬆ Import JSON<input type="file" id="s-import" accept=".json" style="display:none"></label>
         </div>
+      </div>
+      <div class="panel" style="margin-top:14px"><h3>✉️ Email (SMTP)</h3>
+        <p style="color:var(--muted);font-size:.85rem">Outgoing email for customer password-setup invites, password resets and admin alerts. The SMTP password is stored encrypted and never shown again — leave the password field blank to keep the saved one.</p>
+        <div id="em-state" style="font-size:.88rem;margin-bottom:8px"></div>
+        <div class="form-row">
+          <label class="fld"><span>Site URL (used in email links, e.g. https://kb.example.com)</span><input id="em-siteurl" placeholder="https://kb.xzavaincloud.com"></label>
+          <label class="fld"><span>From name</span><input id="em-fromname" placeholder="XC Wiki"></label>
+        </div>
+        <div class="form-row3">
+          <label class="fld"><span>SMTP host</span><input id="em-host" placeholder="smtp.gmail.com"></label>
+          <label class="fld"><span>Port</span><input id="em-port" type="number" min="1" max="65535" placeholder="587"></label>
+          <label class="fld"><span>Encryption</span><select id="em-secure"><option value="starttls">STARTTLS (587)</option><option value="tls">SSL/TLS (465)</option><option value="none">None</option></select></label>
+        </div>
+        <div class="form-row3">
+          <label class="fld"><span>Username</span><input id="em-user" autocomplete="off"></label>
+          <label class="fld"><span>Password</span><input id="em-pass" type="password" autocomplete="new-password" placeholder="•••• (unchanged)"></label>
+          <label class="fld"><span>From email</span><input id="em-fromemail" type="email" placeholder="wiki@example.com"></label>
+        </div>
+        <label class="check-row"><input type="checkbox" id="em-alerts"> Email staff when a reader leaves article feedback</label>
+        <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
+          <button class="btn small" id="em-save">Save email settings</button>
+          <button class="btn ghost small" id="em-test">Send test email to me</button>
+          <span id="em-testout" style="font-size:.85rem"></span>
+        </div>
       </div>`;
     document.getElementById('s-export').onclick = () => { window.location = '/api/admin/export'; };
     document.getElementById('s-import').onchange = async (e) => {
@@ -1757,6 +1862,53 @@ const AdminView = {
         toast(`Imported ${r.imported} article(s) as drafts`, 'ok');
       } catch (err) { toast('Import failed: ' + err.message, 'err'); }
     };
+    /* ---- email (SMTP) settings ---- */
+    const emv = id => document.getElementById(id);
+    const loadEmail = async () => {
+      try {
+        const s = await api('/api/admin/email-settings');
+        emv('em-siteurl').value = s.site_url || '';
+        emv('em-host').value = s.smtp_host || '';
+        emv('em-port').value = s.smtp_port || '587';
+        emv('em-secure').value = s.smtp_secure || 'starttls';
+        emv('em-user').value = s.smtp_user || '';
+        emv('em-fromname').value = s.smtp_from_name || '';
+        emv('em-fromemail').value = s.smtp_from_email || '';
+        emv('em-alerts').checked = !!s.email_alerts_feedback;
+        emv('em-pass').placeholder = s.smtp_pass_set ? `${s.smtp_pass_masked} (blank = keep)` : 'Not set';
+        emv('em-state').innerHTML = s.configured
+          ? '<span class="pill published">Email is configured</span>'
+          : '<span class="pill archived">Email not configured — invite links are shown to copy manually</span>';
+      } catch (e) { toast(e.message, 'err'); }
+    };
+    emv('em-save').onclick = async () => {
+      const payload = {
+        site_url: emv('em-siteurl').value.trim(),
+        smtp_host: emv('em-host').value.trim(),
+        smtp_port: Number(emv('em-port').value) || 587,
+        smtp_secure: emv('em-secure').value,
+        smtp_user: emv('em-user').value.trim(),
+        smtp_from_name: emv('em-fromname').value.trim(),
+        smtp_from_email: emv('em-fromemail').value.trim(),
+        email_alerts_feedback: emv('em-alerts').checked,
+      };
+      const pw = emv('em-pass').value;
+      if (pw) payload.smtp_pass = pw;
+      try {
+        await api('/api/admin/email-settings', { method: 'PUT', body: JSON.stringify(payload) });
+        emv('em-pass').value = '';
+        toast('Email settings saved', 'ok');
+        loadEmail();
+      } catch (e) { toast(e.message, 'err'); }
+    };
+    emv('em-test').onclick = async () => {
+      emv('em-testout').textContent = 'Sending…';
+      try {
+        const r = await api('/api/admin/email-test', { method: 'POST', body: JSON.stringify({}) });
+        emv('em-testout').textContent = `✅ Sent to ${r.to} — check your inbox.`;
+      } catch (e) { emv('em-testout').textContent = '❌ ' + e.message; }
+    };
+    loadEmail();
   },
 };
 

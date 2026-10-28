@@ -132,26 +132,15 @@ const AdminView = {
         <button class="btn ghost small" data-bulk="set-visibility">👁 Set visibility…</button>
         <button class="btn danger small" data-bulk="delete">Delete</button>
       </div>
-      <div style="overflow-x:auto"><table class="tbl"><thead><tr>
-        <th><input type="checkbox" id="sel-all"></th><th>Title</th><th>Status</th><th>Visibility</th><th>Category</th><th>Views</th><th>Updated</th><th></th>
-      </tr></thead><tbody id="art-rows"></tbody></table></div>`;
+      <label class="art-select-all"><input type="checkbox" id="sel-all"> Select all articles</label>
+      <div id="art-groups"></div>`;
 
-    const load = async () => {
-      const q = new URLSearchParams();
-      const v = id => document.getElementById(id).value;
-      if (v('f-q')) q.set('q', v('f-q'));
-      if (v('f-status')) q.set('status', v('f-status'));
-      if (v('f-vis')) q.set('visibility', v('f-vis'));
-      if (v('f-cat')) q.set('category_id', v('f-cat'));
-      const rows = await api('/api/admin/articles?' + q.toString());
-      const tb = document.getElementById('art-rows');
-      tb.innerHTML = rows.map(a => `
+    const rowHtml = (a) => `
         <tr>
           <td><input type="checkbox" class="sel" value="${a.id}"></td>
           <td><a href="#/admin/article/${a.id}" style="color:var(--text);font-weight:600">${esc(a.title)}</a><br><small style="color:var(--muted2)">/${esc(a.slug)}</small></td>
           <td><span class="pill ${a.status}">${a.status}</span>${a.featured ? ' ⭐' : ''}</td>
           <td>${this.visPill(a.visibility)}${a.visibility === 'groups' ? `<div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap">${(a.groups || []).map(g => `<span class="pill" style="background:${esc(g.color || '#8B5CF6')}22;color:${esc(g.color || '#8B5CF6')}">${esc(g.name)}</span>`).join('') || '<span style="color:var(--red);font-size:.75rem">no group!</span>'}</div>` : ''}</td>
-          <td>${a.category ? esc(a.category.name) : '—'}</td>
           <td>${a.views}</td>
           <td style="white-space:nowrap">${timeAgo(a.updated_at)}</td>
           <td style="white-space:nowrap">
@@ -160,27 +149,71 @@ const AdminView = {
             <a class="link-btn" href="#/admin/versions/${a.id}">History</a> ·
             <button class="link-btn" data-del="${a.id}" style="color:var(--red)">Delete</button>
           </td>
-        </tr>`).join('') || '<tr><td colspan="8" class="empty">No articles.</td></tr>';
-      tb.querySelectorAll('[data-pub]').forEach(b => b.onclick = async () => {
+        </tr>`;
+
+    const load = async () => {
+      const q = new URLSearchParams();
+      const v = id => document.getElementById(id).value;
+      if (v('f-q')) q.set('q', v('f-q'));
+      if (v('f-status')) q.set('status', v('f-status'));
+      if (v('f-vis')) q.set('visibility', v('f-vis'));
+      if (v('f-cat')) q.set('category_id', v('f-cat'));
+      const filtering = !!(v('f-q') || v('f-status') || v('f-vis') || v('f-cat'));
+      const rows = await api('/api/admin/articles?' + q.toString());
+      const wrap = document.getElementById('art-groups');
+      // Group the rows by category, in the same order the front end presents
+      // categories (this.tax.categories is already in that order).
+      const sections = this.tax.categories.map(c => ({ cat: c, rows: [] }));
+      const byCat = new Map(sections.map(s => [s.cat.id, s]));
+      const uncat = [];
+      for (const a of rows) {
+        const s = a.category_id != null ? byCat.get(a.category_id) : null;
+        if (s) s.rows.push(a); else uncat.push(a);
+      }
+      // Uncategorized goes last; with no filters it always shows (mirroring the
+      // customer structure), with filters only sections containing matches show.
+      if (uncat.length || !filtering) sections.push({ cat: null, rows: uncat });
+      const visible = sections.filter(s => !filtering || s.rows.length);
+      wrap.innerHTML = visible.map(s => `
+      <section class="art-group">
+        <div class="art-group-head">
+          ${s.cat
+            ? `<span class="chip" style="background:${esc(s.cat.color || '#3B82F6')}22">${s.cat.icon_image ? `<img src="${esc(s.cat.icon_image)}" alt="">` : esc(s.cat.icon || '📁')}</span><h3>${esc(s.cat.name)}</h3>${s.cat.visibility === 'staff' ? '<span class="pill staff">staff</span>' : ''}<span class="art-group-count">${s.rows.length} article${s.rows.length === 1 ? '' : 's'}</span><button class="link-btn" data-edit-cat="${s.cat.id}">✏️ Edit category</button>`
+            : `<span class="chip" style="background:var(--card2)">🗂️</span><h3>Uncategorized</h3><span class="art-group-count">${s.rows.length} article${s.rows.length === 1 ? '' : 's'}</span>`}
+        </div>
+        <div style="overflow-x:auto"><table class="tbl"><thead><tr>
+          <th><input type="checkbox" class="sel-all-group" title="Select all in this category"></th><th>Title</th><th>Status</th><th>Visibility</th><th>Views</th><th>Updated</th><th></th>
+        </tr></thead><tbody>${s.rows.map(rowHtml).join('') || '<tr><td colspan="7" class="empty">No articles yet.</td></tr>'}</tbody></table></div>
+      </section>`).join('') || '<div class="empty" style="padding:26px;text-align:center;color:var(--muted)">No articles match these filters.</div>';
+      wrap.querySelectorAll('[data-edit-cat]').forEach(b => b.onclick = () => {
+        try { sessionStorage.setItem('xcwiki_edit_category', b.dataset.editCat); } catch { /* storage unavailable */ }
+        location.hash = '#/admin/categories';
+      });
+      wrap.querySelectorAll('[data-pub]').forEach(b => b.onclick = async () => {
         try {
           await api('/api/admin/articles/bulk', { method: 'POST', body: JSON.stringify({ ids: [Number(b.dataset.pub)], action: 'publish' }) });
           toast('Article published', 'ok'); load();
         } catch (e) { toast(e.message, 'err'); }
       });
-      tb.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
+      wrap.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
         if (!confirm('Delete this article permanently? This cannot be undone.')) return;
         await api('/api/admin/articles/' + b.dataset.del, { method: 'DELETE' });
         toast('Article deleted', 'ok'); load();
       });
       const updateBulk = () => {
-        const n = tb.querySelectorAll('.sel:checked').length;
+        const n = wrap.querySelectorAll('.sel:checked').length;
         document.getElementById('bulk-bar').style.display = n ? 'flex' : 'none';
         document.getElementById('bulk-count').textContent = `${n} selected`;
       };
-      tb.querySelectorAll('.sel').forEach(c => c.onchange = updateBulk);
+      wrap.querySelectorAll('.sel').forEach(c => c.onchange = updateBulk);
+      wrap.querySelectorAll('.sel-all-group').forEach(cb => cb.onchange = (e) => {
+        e.target.closest('section').querySelectorAll('.sel').forEach(c => c.checked = e.target.checked);
+        updateBulk();
+      });
       document.getElementById('sel-all').onchange = (e) => {
-        tb.querySelectorAll('.sel').forEach(c => c.checked = e.target.checked); updateBulk();
+        wrap.querySelectorAll('.sel').forEach(c => c.checked = e.target.checked); updateBulk();
       };
+      updateBulk();
     };
     document.getElementById('f-go').onclick = load;
     document.getElementById('f-q').onkeydown = (e) => { if (e.key === 'Enter') load(); };
@@ -546,6 +579,21 @@ const AdminView = {
       await api(`/api/admin/${kind}/${b.dataset.del}`, { method: 'DELETE' });
       toast('Deleted', 'ok'); await this.loadTax(); this.taxManager(main, kind);
     });
+    // Front-end "Edit this category" hand-off: a staff shortcut on the public
+    // site (or the grouped Articles view) stashes the category id and lands
+    // here. Consume it exactly once so plain visits never reopen the editor.
+    if (kind === 'categories') {
+      let want = null;
+      try { want = sessionStorage.getItem('xcwiki_edit_category'); sessionStorage.removeItem('xcwiki_edit_category'); } catch { /* storage unavailable */ }
+      if (want) {
+        const row = rows.find(r => String(r.id) === String(want));
+        if (row) {
+          form(row);
+          const box = document.getElementById('tx-form');
+          if (box) box.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      }
+    }
   },
 
   async tagsManager(main) {

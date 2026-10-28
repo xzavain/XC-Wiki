@@ -723,7 +723,7 @@ app.get('/api/admin/articles', requireAuth, (req, res) => {
     JOIN customer_groups g ON g.id = ag.group_id ORDER BY g.name`).all()) {
     (groupMap[r.article_id] = groupMap[r.article_id] || []).push({ id: r.id, name: r.name, color: r.color });
   }
-  res.json(rows.map(r => ({ ...articleCard(r), status: r.status, groups: groupMap[r.id] || [] })));
+  res.json(rows.map(r => ({ ...articleCard(r), status: r.status, category_id: r.category_id, groups: groupMap[r.id] || [] })));
 });
 
 app.get('/api/admin/articles/:id', requireAuth, (req, res) => {
@@ -933,7 +933,12 @@ function crudRoutes(base, table, fields) {
     if (!b.name || !String(b.name).trim()) return res.status(400).json({ error: 'Name is required' });
     const slug = uniqueSlug(db, b.slug || b.name, table);
     const cols = ['name', 'slug', ...fields];
-    const vals = [String(b.name).trim(), slug, ...fields.map(f => b[f] ?? '')];
+    // parent_id '' (sent when no parent is chosen) must be stored as NULL,
+    // otherwise the categories.parent_id foreign key rejects the insert
+    const vals = [String(b.name).trim(), slug, ...fields.map(f => {
+      const v = b[f] ?? '';
+      return f === 'parent_id' && v === '' ? null : v;
+    })];
     const id = db.prepare(`INSERT INTO ${table} (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`).run(...vals).lastInsertRowid;
     logActivity(db, req.user.id, `${base}_create`, `Created ${table} "${String(b.name).trim()}"`);
     res.json({ id, slug });

@@ -295,8 +295,9 @@ function closeModal() { document.getElementById('modal-root').innerHTML = ''; }
 
 function artRow(a) {
   const lock = a.restricted ? ' <span class="lock" title="Restricted article">🔒</span>' : '';
+  const edit = canStaffEdit() ? `<a class="staff-edit staff-edit-inline" href="#/admin/article/${a.id}" title="Edit this article">✏️ Edit</a>` : '';
   return `<div class="art-row">
-    <a class="t" href="#/article/${esc(a.slug)}">${esc(a.title)}${lock}</a>
+    <a class="t" href="#/article/${esc(a.slug)}">${esc(a.title)}${lock}</a>${edit}
     <div class="meta">${a.category ? esc(a.category.name) + ' · ' : ''}${a.service ? esc(a.service.name) + ' · ' : ''}${a.reading_time_min} min${a.updated_at ? ' · ' + timeAgo(a.updated_at) : ''}</div>
   </div>`;
 }
@@ -306,6 +307,30 @@ function artRow(a) {
 function catCardVisual(c) {
   if (c && c.cover_image) return `<img class="ci-cover" src="${esc(c.cover_image)}" alt="">`;
   return `<span class="ci" style="background:${esc((c && c.color) || '#3B82F6')}22;color:${esc((c && c.color) || '#3B82F6')}">${esc((c && c.icon) || '📄')}</span>`;
+}
+
+/* Staff-only front-end edit shortcuts. Rendered only for signed-in staff with
+   an editing role (admin/editor) who are not previewing as a customer;
+   customers, viewers and signed-out visitors get exactly the markup the
+   front end has always produced. */
+function canStaffEdit() {
+  return !!App.user && !App.previewMode && App.user.kind !== 'customer'
+    && (App.user.role === 'admin' || App.user.role === 'editor');
+}
+function catEditPill(c) {
+  return `<span class="staff-edit staff-edit-card" role="button" tabindex="0" title="Edit this category" data-edit-cat="${c.id}">✏️ Edit</span>`;
+}
+function wireStaffEdits(root) {
+  if (!canStaffEdit()) return;
+  (root || document).querySelectorAll('[data-edit-cat]').forEach(el => {
+    const go = (e) => {
+      e.preventDefault(); e.stopPropagation();
+      try { sessionStorage.setItem('xcwiki_edit_category', el.dataset.editCat); } catch { /* storage unavailable */ }
+      location.hash = '#/admin/categories';
+    };
+    el.addEventListener('click', go);
+    el.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') go(e); });
+  });
 }
 
 /* ---------------- views ---------------- */
@@ -341,7 +366,7 @@ async function viewHome() {
         <a class="cat-card" href="#/category/${esc(c.slug)}">
           ${catCardVisual(c)}
           <strong>${esc(c.name)}</strong><small>${esc(c.description)}</small>
-          <span class="arr">→</span>
+          ${canStaffEdit() ? catEditPill(c) : '<span class="arr">→</span>'}
         </a>`).join('')}
     </div>
 
@@ -387,6 +412,7 @@ async function viewHome() {
   document.getElementById('hero-go').onclick = go;
   document.getElementById('hero-q').onkeydown = (e) => { if (e.key === 'Enter') go(); };
   app.querySelectorAll('.chip[data-q]').forEach(ch => ch.onclick = () => { location.hash = '#/search/' + encodeURIComponent(ch.dataset.q); });
+  wireStaffEdits(app);
 }
 
 async function continueReadingCard() {
@@ -427,6 +453,7 @@ async function viewArticle(slug) {
     <div class="article-layout">
       <article class="article-body">
         <h1>${esc(d.title)}</h1>
+        ${canStaffEdit() ? `<div style="margin:4px 0 10px"><a class="staff-edit staff-edit-head" href="#/admin/article/${d.id}">✏️ Edit this article</a></div>` : ''}
         <div class="article-meta">
           <span>👁 ${d.views} views</span><span>⏱ ${d.reading_time_min} min read</span>
           ${d.category ? `<span>${(d.category.cover_image || d.category.icon_image) ? `<img src="${esc(d.category.cover_image || d.category.icon_image)}" alt="" style="width:16px;height:16px;object-fit:cover;border-radius:4px;vertical-align:-3px">` : esc(d.category.icon)} ${esc(d.category.name)}</span>` : ''}
@@ -511,9 +538,10 @@ async function viewTaxonomyList(kind) {
       <a class="cat-card" href="#/${kind === 'categories' ? 'category' : kind === 'services' ? 'service' : 'tag'}/${esc(x.slug)}">
         ${kind === 'categories' ? catCardVisual(x) : `<span class="ci" style="background:${esc(x.color || '#3B82F6')}22;color:${esc(x.color || '#3B82F6')}">${esc(x.icon || '🏷️')}</span>`}
         <strong>${esc(x.name)}</strong><small>${esc(x.description || '')}${x.article_count !== undefined ? ` · ${x.article_count} articles` : ''}</small>
-        <span class="arr">→</span>
+        ${kind === 'categories' && canStaffEdit() ? catEditPill(x) : '<span class="arr">→</span>'}
       </a>`).join('')}
     </div>`;
+  wireStaffEdits(app);
 }
 
 async function viewTaxonomyDetail(kind, slug) {
@@ -528,9 +556,10 @@ async function viewTaxonomyDetail(kind, slug) {
       : esc(obj.icon || '');
   app.innerHTML = `<div class="crumbs"><a href="#/">Home</a> › <a href="#/${single}">${single[0].toUpperCase() + single.slice(1)}</a> › ${esc(obj.name)}</div>
     ${hasCover ? `<img class="cat-banner" src="${esc(obj.cover_image)}" alt="">` : ''}
-    <h1 style="margin-top:6px">${headIcon} ${esc(obj.name)}</h1>
+    <h1 style="margin-top:6px">${headIcon} ${esc(obj.name)}${kind === 'category' && canStaffEdit() ? `<a class="staff-edit staff-edit-head" href="#/admin/categories" data-edit-cat="${obj.id}" style="margin-left:12px">✏️ Edit this category</a>` : ''}</h1>
     ${obj.description ? `<p style="color:var(--muted)">${esc(obj.description)}</p>` : ''}
     <div class="art-list" style="margin-top:14px">${d.articles.map(artRow).join('') || '<div class="empty">No articles yet.</div>'}</div>`;
+  wireStaffEdits(app);
 }
 
 async function viewSearchPage(q) {

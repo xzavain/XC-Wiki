@@ -8,6 +8,7 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const { marked } = require('marked');
+const APP_VERSION = require('./package.json').version;
 const { sanitizeArticleHtml, sanitizeCustomCss } = require('./lib/html');
 const {
   getDb, getSettings, setSettings, ensureSettingsSeed, logActivity,
@@ -455,6 +456,7 @@ app.get('/api/settings/public', (req, res) => {
   try { out.popular_searches = JSON.parse(s.popular_searches || '[]'); }
   catch { out.popular_searches = []; }
   out.custom_css = sanitizeCustomCss(out.custom_css);
+  out.version = APP_VERSION;
   res.json(out);
 });
 

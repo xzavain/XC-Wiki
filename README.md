@@ -4,6 +4,10 @@ A knowledge base / wiki website system: a public reader portal (search, categori
 
 Stack: **Node 22 + Express + better-sqlite3**, vanilla JS SPA. No build step — clone, `npm install`, `npm start`.
 
+## What's new in 1.1.1
+
+- **Version in the footer** — the running app version (from `package.json`, served via the public settings) is shown in the page footer so you can confirm at a glance that you're on the latest release.
+
 ## What's new in 1.1.0
 
 - **Customers can belong to multiple groups** — group membership is now many-to-many; a customer sees group-restricted articles for *any* group they belong to. Existing single-group assignments migrate automatically on first boot.

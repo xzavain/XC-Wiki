@@ -158,6 +158,7 @@ function applyBranding(s) {
   if (s.footer_text) parts.push(s.footer_text);
   if (s.copyright_line) parts.push(s.copyright_line);
   if (String(s.powered_by) === '1') parts.push('Powered by XC Wiki');
+  if (s.version) parts.push('v' + s.version);
   const ft = document.getElementById('footer-text');
   if (ft) ft.textContent = parts.join(' · ') || '© XC Wiki';
   // hero + titles

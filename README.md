@@ -4,6 +4,10 @@ A knowledge base / wiki website system: a public reader portal (search, categori
 
 Stack: **Node 22 + Express + better-sqlite3**, vanilla JS SPA. No build step — clone, `npm install`, `npm start`.
 
+## What's new in 1.1.2
+
+- **Fixed picker chips stacking names word-per-line** — the service/group chips in the Invites panel, customer form, and category restrictions now size to their content (icon + full name on one line) and wrap as whole chips instead of squeezing.
+
 ## What's new in 1.1.1
 
 - **Version in the footer** — the running app version (from `package.json`, served via the public settings) is shown in the page footer so you can confirm at a glance that you're on the latest release.

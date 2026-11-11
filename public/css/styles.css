@@ -426,8 +426,13 @@ label.fld > span { display: block; font-size: .78rem; color: var(--muted); margi
 
 /* ---------- misc new components ---------- */
 .lock { font-size: .8em; }
-.chip-pick { display: inline-flex; align-items: center; gap: 6px; background: var(--input); border: 1px solid var(--border); border-radius: 999px; padding: 5px 12px; font-size: .8rem; cursor: pointer; }
-.chip-pick input { accent-color: var(--accent); }
+/* Chips size to their content and wrap as whole units inside their picker
+   row: flex:none stops the row from squeezing a chip down to its longest
+   word (which stacked multi-word names one word per line), nowrap keeps
+   icon + full name on one line, and the row cap keeps a lone very long
+   name from breaking the layout. */
+.chip-pick { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; white-space: nowrap; max-width: 100%; overflow: hidden; background: var(--input); border: 1px solid var(--border); border-radius: 999px; padding: 5px 12px; font-size: .8rem; cursor: pointer; }
+.chip-pick input { flex: 0 0 auto; accent-color: var(--accent); }
 .pw-once { background: #fef9c3; color: #713f12; border: 1px solid #fde68a; border-radius: 10px; padding: 10px 14px; font-size: .85rem; }
 .pw-once code { font-size: 1rem; font-weight: 700; user-select: all; }
 [data-theme="dark"] .pw-once { background: #422006; color: #fde68a; border-color: #92400e; }

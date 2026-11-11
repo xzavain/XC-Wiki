@@ -4,6 +4,12 @@ A knowledge base / wiki website system: a public reader portal (search, categori
 
 Stack: **Node 22 + Express + better-sqlite3**, vanilla JS SPA. No build step — clone, `npm install`, `npm start`.
 
+## What's new in 1.1.4
+
+- **Fixed the category cover Upload button appearing to do nothing** — the cover field (and the branding logo/favicon/hero fields, plus the group/service chip pickers) wrapped the Upload button's `<label>` inside another `<label>`, which is invalid HTML with inconsistent browser behavior; the field wrappers are now plain containers, so the button works the same everywhere.
+- **Uploads can no longer fail silently** — the cover field now shows a persistent inline status ("Uploading…", "✓ Uploaded …", or the exact problem in red) next to the field, not just a fleeting toast. And after any attempt, picking the same file again works — previously a retry with the same file was silently ignored.
+- **Clear message for iPhone HEIC photos** — HEIC/HEIF photos (the iPhone default) can't be displayed by most web browsers, so instead of the old "File type not allowed" the uploader now explains that and asks for a JPG or PNG version — the check happens instantly, before the file is sent. Oversized files likewise state the actual limit ("uploads are limited to 15 MB per file") instead of "File too large".
+
 ## What's new in 1.1.3
 
 - **Category restrictions are group-based only** — categories can no longer be restricted by service; the "Restrict to services" picker and badges are gone from Admin → Categories, and visibility is decided by group restrictions alone (articles keep their own group-based visibility as before). Services themselves are unchanged — still assigned to customers and still used by invites, CSV import and BookStack import. Existing category→service restriction rows from earlier versions are left in the database untouched but are no longer enforced.

@@ -88,13 +88,25 @@ const UPLOAD_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 
   'pdf', 'txt', 'md', 'log', 'zip', 'json', 'csv']);
 const UPLOAD_MIMES = /^(image\/(png|jpe?g|gif|webp|svg\+xml|bmp|x-icon)|video\/|audio\/|application\/pdf|text\/(plain|markdown|csv)|application\/(zip|x-zip-compressed|json))$/;
 
+/* HEIC/HEIF (the default iPhone photo format) is rejected with a specific,
+   human-readable message: browsers other than Safari cannot render HEIC in
+   an <img>, so accepting it would store covers/photos that appear broken
+   to most visitors. The wording is mirrored by the client-side pre-check in
+   public/js/admin.js (uploadFiles) so the user sees the same text either way. */
+const HEIC_UPLOAD_ERROR = "That photo is in HEIC format — web browsers can't display HEIC images, so it can't be uploaded. Please pick a JPG or PNG version of the photo instead.";
+const TOO_LARGE_UPLOAD_ERROR = 'That file is too large — uploads are limited to 15 MB per file.';
+const uploadErrorText = (err) => (err && err.code === 'LIMIT_FILE_SIZE') ? TOO_LARGE_UPLOAD_ERROR : ((err && err.message) || 'Upload failed');
+
 const upload = multer({
   storage,
   limits: { fileSize: 15 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const ext = (file.originalname || '').split('.').pop().toLowerCase();
+    if (ext === 'heic' || ext === 'heif' || /^image\/hei[cf]$/.test(file.mimetype || '')) {
+      return cb(new Error(HEIC_UPLOAD_ERROR), false);
+    }
     const ok = UPLOAD_MIMES.test(file.mimetype) || UPLOAD_EXTS.has(ext);
-    cb(ok ? null : new Error('File type not allowed'), ok);
+    cb(ok ? null : new Error("That file type isn't supported for uploads."), ok);
   },
 });
 
@@ -1669,7 +1681,7 @@ app.post('/api/admin/customers/import', requireAuth, async (req, res) => {
 
 app.post('/api/admin/upload', requireAuth, (req, res) => {
   upload.single('file')(req, res, (err) => {
-    if (err) return res.status(400).json({ error: err.message || 'Upload failed' });
+    if (err) return res.status(400).json({ error: uploadErrorText(err) });
     if (!req.file) return res.status(400).json({ error: 'No file received' });
     const db = getDb();
     const out = insertAttachment(db, req.file, req.user.id, req.body.article_id || null);
@@ -1680,7 +1692,7 @@ app.post('/api/admin/upload', requireAuth, (req, res) => {
 
 app.post('/api/admin/upload-multi', requireAuth, (req, res) => {
   upload.array('files', 40)(req, res, (err) => {
-    if (err) return res.status(400).json({ error: err.message || 'Upload failed' });
+    if (err) return res.status(400).json({ error: uploadErrorText(err) });
     if (!req.files || !req.files.length) return res.status(400).json({ error: 'No files received' });
     const db = getDb();
     const out = req.files.map(f => insertAttachment(db, f, req.user.id, req.body.article_id || null));

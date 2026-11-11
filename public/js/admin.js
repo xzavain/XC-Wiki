@@ -296,6 +296,19 @@ const AdminView = {
   /* ---------- media helpers & picker (editor + library) ---------- */
 
   async uploadFiles(fileList, articleId) {
+    /* Pre-flight checks so a doomed upload fails instantly with a clear,
+       human message instead of a round-trip and a cryptic server error.
+       The server enforces the same rules with the same wording. HEIC (the
+       default iPhone photo format) is refused rather than accepted:
+       browsers other than Safari cannot display HEIC in an <img>. */
+    for (const f of fileList) {
+      if (/\.hei[cf]$/i.test(f.name || '') || /^image\/hei[cf]$/i.test(f.type || '')) {
+        throw new Error("That photo is in HEIC format — web browsers can't display HEIC images, so it can't be uploaded. Please pick a JPG or PNG version of the photo instead.");
+      }
+      if (f.size > 15 * 1024 * 1024) {
+        throw new Error('That file is too large — uploads are limited to 15 MB per file.');
+      }
+    }
     const fd = new FormData();
     for (const f of fileList) fd.append('files', f);
     if (articleId) fd.append('article_id', articleId);
@@ -357,6 +370,7 @@ const AdminView = {
     document.getElementById('mp-cancel').onclick = closeModal;
     document.getElementById('mp-file').onchange = async (e) => {
       const files = [...e.target.files];
+      e.target.value = ''; // allow re-picking the same file after a failed attempt
       if (!files.length) return;
       const st = document.getElementById('mp-status');
       st.textContent = `Uploading ${files.length} file(s)…`;
@@ -564,14 +578,16 @@ const AdminView = {
         <label class="fld"><span>Auto-add holders to group <small style="color:var(--muted)">(customers with this service join the group automatically — never removed)</small></span>
           <select id="tx-group"><option value="">— none —</option>${this.groups.map(g => `<option value="${g.id}" ${r?.group_id === g.id ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}</select></label>`}
         ${isCat ? `
-        <label class="fld"><span>Cover image <small style="color:var(--muted)">(BookStack-style book cover — becomes the category's lead visual on cards and listings; the emoji icon is only a fallback when no cover is set)</small></span>
+        <div class="fld"><span>Cover image <small style="color:var(--muted)">(BookStack-style book cover — becomes the category's lead visual on cards and listings; the emoji icon is only a fallback when no cover is set)</small></span>
           <span style="display:flex;gap:8px;align-items:center">
             <input id="tx-coverimg" value="${esc(r?.cover_image || r?.icon_image || '')}" placeholder="/media/…" style="flex:1">
             <span id="tx-coverprev">${(r?.cover_image || r?.icon_image) ? `<img src="${esc(r.cover_image || r.icon_image)}" style="width:52px;height:32px;object-fit:cover;border-radius:6px">` : ''}</span>
             <label class="btn ghost small" style="cursor:pointer">Upload<input type="file" id="tx-coverfile" accept="image/*" style="display:none"></label>
             <button class="btn ghost small" type="button" id="tx-coverpick">Library…</button>
             <button class="btn ghost small" type="button" id="tx-coverclear">Clear</button>
-          </span></label>` : ''}
+          </span>
+          <div id="tx-covermsg" role="status" style="font-size:.8rem;margin-top:6px;min-height:1.05em"></div>
+        </div>` : ''}
         ${isCat ? `
         <div class="form-row3">
           <label class="fld"><span>Parent</span><select id="tx-parent"><option value="">None</option>${this.tax.categories.filter(c => !r || c.id !== r.id).map(c => `<option value="${c.id}" ${r?.parent_id === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>
@@ -580,8 +596,8 @@ const AdminView = {
             <option value="staff" ${r?.visibility === 'staff' ? 'selected' : ''}>🔒 Staff only</option>
           </select></label>
         </div>
-        <label class="fld"><span>Restrict to groups <small style="color:var(--muted)">(empty = no restriction; a customer must belong to at least one of these groups to see this category and its articles)</small></span>
-          <span style="display:flex;gap:6px;flex-wrap:wrap">${this.groups.map(g => `<label class="chip-pick"><input type="checkbox" class="tx-rgrp" value="${g.id}" ${(r?.restrict_group_ids || []).includes(g.id) ? 'checked' : ''}> ${esc(g.name)}</label>`).join('') || '<small style="color:var(--muted)">No groups yet.</small>'}</span></label>` : ''}
+        <div class="fld"><span>Restrict to groups <small style="color:var(--muted)">(empty = no restriction; a customer must belong to at least one of these groups to see this category and its articles)</small></span>
+          <span style="display:flex;gap:6px;flex-wrap:wrap">${this.groups.map(g => `<label class="chip-pick"><input type="checkbox" class="tx-rgrp" value="${g.id}" ${(r?.restrict_group_ids || []).includes(g.id) ? 'checked' : ''}> ${esc(g.name)}</label>`).join('') || '<small style="color:var(--muted)">No groups yet.</small>'}</span></div>` : ''}
         <div style="display:flex;gap:8px"><button class="btn small" id="tx-save">Save</button><button class="btn ghost small" id="tx-cancel">Cancel</button></div>
         </div>`;
       document.getElementById('tx-cancel').onclick = () => this.taxManager(main, kind);
@@ -589,15 +605,31 @@ const AdminView = {
       if (isCat) {
         const coverInput = document.getElementById('tx-coverimg');
         const coverPrev = document.getElementById('tx-coverprev');
-        const setCover = (url) => { coverInput.value = url || ''; coverPrev.innerHTML = url ? `<img src="${esc(url)}" style="width:52px;height:32px;object-fit:cover;border-radius:6px">` : ''; };
+        const coverMsg = document.getElementById('tx-covermsg');
+        /* Persistent inline status under the field: an upload must never
+           fail (or succeed) silently — a toast alone is too easy to miss. */
+        const setCoverMsg = (text, color) => { if (coverMsg) { coverMsg.textContent = text || ''; coverMsg.style.color = color || ''; } };
+        const setCover = (url) => { coverInput.value = url || ''; coverPrev.innerHTML = url ? `<img src="${esc(url)}" style="width:52px;height:32px;object-fit:cover;border-radius:6px">` : ''; setCoverMsg(''); };
         coverInput.addEventListener('input', () => setCover(coverInput.value));
         document.getElementById('tx-coverclear').onclick = () => setCover('');
         document.getElementById('tx-coverpick').onclick = () => this.openMediaPicker({ kind: 'image', title: 'Choose category cover', cb: (f) => setCover(f.url) });
         document.getElementById('tx-coverfile').onchange = async (e) => {
           const f = e.target.files[0];
+          /* Clear the input so picking the SAME file again later fires
+             'change' again — otherwise a retry after a failed upload is a
+             silent no-op and the Upload button appears dead. */
+          e.target.value = '';
           if (!f) return;
-          try { const [up] = await this.uploadFiles([f]); setCover(up.url); toast('Cover uploaded', 'ok'); }
-          catch (err) { toast(err.message, 'err'); }
+          setCoverMsg(`Uploading ${f.name}…`, 'var(--muted)');
+          try {
+            const [up] = await this.uploadFiles([f]);
+            setCover(up.url);
+            setCoverMsg(`✓ Uploaded ${f.name}`, 'var(--green)');
+            toast('Cover uploaded', 'ok');
+          } catch (err) {
+            setCoverMsg('⚠ ' + err.message, 'var(--red)');
+            toast(err.message, 'err');
+          }
         };
       }
       document.getElementById('tx-save').onclick = async () => {
@@ -791,7 +823,7 @@ const AdminView = {
     drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
     drop.addEventListener('dragleave', () => drop.classList.remove('over'));
     drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); doUpload(e.dataTransfer.files); });
-    document.getElementById('med-files').onchange = (e) => doUpload(e.target.files);
+    document.getElementById('med-files').onchange = (e) => { doUpload(e.target.files); e.target.value = ''; };
     document.getElementById('med-q').oninput = (e) => { state.q = e.target.value.trim().toLowerCase(); render(); };
     document.getElementById('med-kind').onchange = (e) => { state.kind = e.target.value; load(); };
     document.getElementById('med-sort').onchange = (e) => { state.sort = e.target.value; load(); };
@@ -1063,8 +1095,8 @@ const AdminView = {
             <label class="fld"><span>Full name</span><input id="iv-name" placeholder="Jane Example"></label>
             <label class="fld"><span>Email</span><input id="iv-email" type="email" placeholder="jane@example.com"></label>
           </div>
-          <label class="fld"><span>Services</span>
-            <span style="display:flex;gap:6px;flex-wrap:wrap">${(this.tax.services || []).map(s => `<label class="chip-pick"><input type="checkbox" class="iv-svc" value="${s.id}"> ${esc(s.name)}</label>`).join('') || '<small style="color:var(--muted)">No services yet.</small>'}</span></label>
+          <div class="fld"><span>Services</span>
+            <span style="display:flex;gap:6px;flex-wrap:wrap">${(this.tax.services || []).map(s => `<label class="chip-pick"><input type="checkbox" class="iv-svc" value="${s.id}"> ${esc(s.name)}</label>`).join('') || '<small style="color:var(--muted)">No services yet.</small>'}</span></div>
           <div style="display:flex;gap:8px;align-items:center"><button class="btn small" id="iv-create">✉ Create & send invite</button><span id="iv-out" style="font-size:.85rem"></span></div>
           <div style="overflow-x:auto;margin-top:14px"><table class="tbl"><thead><tr><th>Name</th><th>Email</th><th>Services</th><th>Status</th><th>Sent</th><th>Expires</th><th></th></tr></thead>
           <tbody>${invites.map(iv => `
@@ -1130,10 +1162,10 @@ const AdminView = {
         <label class="fld"><span>Company</span><input id="cf-company" value="${esc(c?.company || '')}"></label>
         <label class="fld"><span>Phone</span><input id="cf-phone" value="${esc(c?.phone || '')}"></label>
       </div>
-      <label class="fld"><span>Groups <small style="color:var(--muted)">(tick all that apply — group-restricted articles are visible to members of any of them)</small></span>
-        <span style="display:flex;gap:6px;flex-wrap:wrap">${this.groups.map(g => `<label class="chip-pick"><input type="checkbox" class="cf-group" value="${g.id}" ${(c?.groups || []).some(x => x.id === g.id) || c?.group_id === g.id ? 'checked' : ''}> <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${esc(normalizeColorJs(g.color))}"></span> ${esc(g.name)}</label>`).join('') || '<small style="color:var(--muted)">No groups yet.</small>'}</span></label>
-      <label class="fld"><span>Services <small style="color:var(--muted)">(a service mapped to a group also adds the customer to that group)</small></span>
-        <span style="display:flex;gap:6px;flex-wrap:wrap">${(this.tax.services || []).map(s => `<label class="chip-pick"><input type="checkbox" class="cf-svc" value="${s.id}" ${(c?.services || []).some(x => x.id === s.id) ? 'checked' : ''}> ${esc(s.name)}</label>`).join('') || '<small style="color:var(--muted)">No services yet.</small>'}</span></label>
+      <div class="fld"><span>Groups <small style="color:var(--muted)">(tick all that apply — group-restricted articles are visible to members of any of them)</small></span>
+        <span style="display:flex;gap:6px;flex-wrap:wrap">${this.groups.map(g => `<label class="chip-pick"><input type="checkbox" class="cf-group" value="${g.id}" ${(c?.groups || []).some(x => x.id === g.id) || c?.group_id === g.id ? 'checked' : ''}> <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${esc(normalizeColorJs(g.color))}"></span> ${esc(g.name)}</label>`).join('') || '<small style="color:var(--muted)">No groups yet.</small>'}</span></div>
+      <div class="fld"><span>Services <small style="color:var(--muted)">(a service mapped to a group also adds the customer to that group)</small></span>
+        <span style="display:flex;gap:6px;flex-wrap:wrap">${(this.tax.services || []).map(s => `<label class="chip-pick"><input type="checkbox" class="cf-svc" value="${s.id}" ${(c?.services || []).some(x => x.id === s.id) ? 'checked' : ''}> ${esc(s.name)}</label>`).join('') || '<small style="color:var(--muted)">No services yet.</small>'}</span></div>
       <label class="fld"><span>Notes (staff only)</span><textarea id="cf-notes" rows="2">${esc(c?.notes || '')}</textarea></label>
       <label class="fld"><span>${c ? 'Reset password (blank = keep current)' : 'Password (blank = auto-generated, shown once)'}</span><input id="cf-pass" type="text" placeholder="${c ? '—' : 'auto-generate'}"></label>
       ${c ? '<div style="margin-top:6px"><button class="btn ghost small" id="cf-resetlink" type="button">✉ Email a password reset link</button> <span style="color:var(--muted);font-size:.8rem">They set a new password themselves; their sessions are signed out.</span></div>'
@@ -1211,6 +1243,7 @@ const AdminView = {
     };
     document.getElementById('ci-file').onchange = async (e) => {
       const f = e.target.files[0];
+      e.target.value = ''; // allow re-picking the same file
       if (f) document.getElementById('ci-csv').value = await f.text();
     };
     const parseLocal = (text) => {
@@ -1397,15 +1430,15 @@ const AdminView = {
               </select></label>
             </div>
             <div class="form-row">
-              <label class="fld"><span>Logo image URL</span>
+              <div class="fld"><span>Logo image URL</span>
                 <span style="display:flex;gap:8px"><input id="b-logourl" value="${esc(s.logo_url)}" placeholder="/media/…" style="flex:1">
                 <label class="btn ghost small" style="cursor:pointer">Upload<input type="file" id="b-logo-file" accept="image/*" style="display:none"></label>
-                <button class="btn ghost small" type="button" id="b-logo-pick">Library…</button></span></label>
-              <label class="fld"><span>Favicon (URL or upload an image)</span>
+                <button class="btn ghost small" type="button" id="b-logo-pick">Library…</button></span></div>
+              <div class="fld"><span>Favicon (URL or upload an image)</span>
                 <span style="display:flex;gap:8px;align-items:center"><input id="b-fav" value="${esc(s.favicon_url)}" placeholder="/media/…" style="flex:1">
                 <span id="b-fav-prev">${s.favicon_url ? `<img src="${esc(s.favicon_url)}" style="width:20px;height:20px;object-fit:contain">` : ''}</span>
                 <label class="btn ghost small" style="cursor:pointer">Upload<input type="file" id="b-fav-file" accept="image/*,.ico" style="display:none"></label>
-                <button class="btn ghost small" type="button" id="b-fav-pick">Library…</button></span></label>
+                <button class="btn ghost small" type="button" id="b-fav-pick">Library…</button></span></div>
             </div>
             <div class="form-row">
               <label class="fld"><span>Logo size — height ${' '}<small style="color:var(--muted)">(32–72 px, default 48)</small></span>
@@ -1436,11 +1469,11 @@ const AdminView = {
           <div class="panel" style="margin-top:14px"><h3>Homepage hero</h3>
             <label class="fld"><span>Hero title</span><input id="b-hero" value="${esc(s.hero_title)}"></label>
             <label class="fld"><span>Hero description</span><textarea id="b-herod" rows="2">${esc(s.hero_description)}</textarea></label>
-            <label class="fld"><span>Background banner image <small style="color:var(--muted)">(recommended size: 1600 × 520 px)</small></span>
+            <div class="fld"><span>Background banner image <small style="color:var(--muted)">(recommended size: 1600 × 520 px)</small></span>
               <span style="display:flex;gap:8px"><input id="b-heroimg" value="${esc(s.hero_image_url || '')}" placeholder="/media/… or https://…" style="flex:1">
               <label class="btn ghost small" style="cursor:pointer">Upload<input type="file" id="b-hero-file" accept="image/*" style="display:none"></label>
               <button class="btn ghost small" type="button" id="b-hero-pick">Library…</button>
-              <button class="btn ghost small" type="button" id="b-hero-clear">Clear</button></span></label>
+              <button class="btn ghost small" type="button" id="b-hero-clear">Clear</button></span></div>
             <div class="form-row3">
               <label class="fld"><span>Image fit</span><select id="b-herofit">
                 <option value="cover" ${(s.hero_image_fit || 'cover') === 'cover' ? 'selected' : ''}>Cover (fill, cropped)</option>
@@ -1497,6 +1530,7 @@ const AdminView = {
       document.getElementById(pickId).onclick = () => this.openMediaPicker({ kind: 'image', title: 'Choose image', cb: (f) => { input.value = f.url; input.dispatchEvent(new Event('input')); if (after) after(f.url); } });
       document.getElementById(fileId).onchange = async (e) => {
         const f = e.target.files[0];
+        e.target.value = ''; // allow re-picking the same file after a failed attempt
         if (!f) return;
         try { const [up] = await this.uploadFiles([f]); input.value = up.url; input.dispatchEvent(new Event('input')); if (after) after(up.url); toast('Image uploaded', 'ok'); }
         catch (err) { toast(err.message, 'err'); }
@@ -1941,14 +1975,14 @@ const AdminView = {
           <label class="fld"><span>Visibility</span><select id="bs-vis">
             <option value="all">🌍 Everyone</option><option value="staff">🔒 Staff only</option>
           </select></label>
-          <label class="fld"><span>Re-runs</span>
+          <div class="fld"><span>Re-runs</span>
             <span class="check-row" style="margin:6px 0"><input type="checkbox" id="bs-update"> <label for="bs-update">Update articles that were already imported</label></span>
             <small style="color:var(--muted)">Off = previously imported pages are skipped (nothing duplicates either way; imported media is always reused).</small>
-          </label>
-          <label class="fld"><span>Users</span>
+          </div>
+          <div class="fld"><span>Users</span>
             <span class="check-row" style="margin:6px 0"><input type="checkbox" id="bs-users" checked> <label for="bs-users">Also import users</label></span>
             <small style="color:var(--muted)">BookStack users become customers with no password set (pending). Afterwards, use <strong>Customers → 📩 Welcome</strong> (or “Send welcome to pending”) so they can set a password and sign in.</small>
-          </label>
+          </div>
         </div>
         <div style="display:flex;gap:8px;margin-top:8px">
           <button class="btn" id="bs-run">⬇ Start import</button>
@@ -2144,6 +2178,7 @@ const AdminView = {
     document.getElementById('s-export').onclick = () => { window.location = '/api/admin/export'; };
     document.getElementById('s-import').onchange = async (e) => {
       const f = e.target.files[0];
+      e.target.value = ''; // allow re-picking the same file after a failed attempt
       if (!f) return;
       try {
         const data = JSON.parse(await f.text());

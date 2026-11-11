@@ -319,8 +319,11 @@ input, select, textarea {
   border-radius: 9px; padding: 9px 12px; font-size: .9rem; width: 100%; font-family: inherit;
 }
 input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); border-color: var(--accent); }
-label.fld { display: block; margin: .9em 0; }
-label.fld > span { display: block; font-size: .78rem; color: var(--muted); margin-bottom: 6px; font-weight: 600; }
+/* .fld is a field wrapper: a <label> when the field is a single control,
+   a <div> when the field contains other interactive elements (upload
+   buttons, chip pickers) — a <label> must never wrap another <label>. */
+.fld { display: block; margin: .9em 0; }
+.fld > span { display: block; font-size: .78rem; color: var(--muted); margin-bottom: 6px; font-weight: 600; }
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .form-row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
 .check-row { display: flex; align-items: center; gap: 8px; margin: .6em 0; font-size: .88rem; }

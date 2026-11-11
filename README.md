@@ -4,6 +4,21 @@ A knowledge base / wiki website system: a public reader portal (search, categori
 
 Stack: **Node 22 + Express + better-sqlite3**, vanilla JS SPA. No build step — clone, `npm install`, `npm start`.
 
+## What's new in 1.1.0
+
+- **Customers can belong to multiple groups** — group membership is now many-to-many; a customer sees group-restricted articles for *any* group they belong to. Existing single-group assignments migrate automatically on first boot.
+- **Customers can hold multiple services**, assigned from the customer form.
+- **Service → group auto-membership** — map a service to a group and everyone holding that service is added to the group automatically (additive only, never removes).
+- **Managed invites** — a dedicated Invites section (Admin → Customers): create an invite with name, email and services, track pending / accepted / expired status, copy the invite link any time, and resend. Admins can be notified by **email and/or Discord webhook** when an invite is accepted (Settings → Email).
+- **Hex colors everywhere** — every color control (groups, services, categories, branding) shows and stores `#rrggbb`; older `rgb()` values are normalized automatically, no data migration needed.
+- **BookStack import now imports users too** — BookStack users become pending customers (no password set); send them a friendly **welcome email** from the Customers list (per-customer button or “Send welcome to pending”) so they can set a password and onboard.
+- **CSV import template** — download a ready-made template (Admin → Customers → CSV import → Template CSV); the importer also accepts a **Services** column (semicolon-separated names) alongside the existing per-row Group column.
+- **Clean URLs** — the whole app (reader + admin) now uses standard paths (`/article/<slug>`, `/admin/customers`, …) instead of hash routes. Old `#/…` bookmarks and previously emailed links redirect automatically, once.
+- **Bigger homepage category tiles** — substantially larger tiles with big icons/titles; categories are now the single browse path (the “Browse by Service” section was removed; “Your Services” remains).
+- **Category access control by service and group** — a category can be restricted to customers holding certain services and/or belonging to certain groups (Admin → Categories → edit). Both restrictions compose; staff always see everything; articles inside a restricted category are protected everywhere (home, search, lists, direct links).
+- **OneDrive backups fixed — now truly Microsoft end to end** (Microsoft identity platform + Microsoft Graph; the old build produced malformed Graph URLs so OneDrive file operations could never succeed). Google Drive audited alongside.
+- **Guided cloud-backup setup wizard** — per provider: 1) create the app (deep link + exact copyable redirect URI), 2) paste the keys (with format checks), 3) one-click Connect with automatic verification — the panel shows the connected account and a **Test connection** probe (account + folder + contents), with plain-language errors (e.g. redirect-URI mismatch, wrong secret).
+
 ## Screenshots
 
 | Home | Article |

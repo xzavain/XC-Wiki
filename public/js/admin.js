@@ -1,6 +1,46 @@
 'use strict';
 /* XC Wiki — staff admin dashboard. */
 
+/* Colors are handled as lowercase hex (#rrggbb) everywhere in the admin
+   UI. Accepts #rgb / #rrggbb / rgb() / rgba() and normalizes, so legacy
+   rgb() strings stored by older builds display as hex. Mirrors the
+   server-side helper in lib/db.js. */
+function normalizeColorJs(value, fallback = '#8b5cf6') {
+  const fb = /^#[0-9a-f]{6}$/i.test(String(fallback || '').trim()) ? String(fallback).trim().toLowerCase() : '#8b5cf6';
+  if (value === null || value === undefined) return fb;
+  const s = String(value).trim().toLowerCase();
+  let m = s.match(/^#([0-9a-f]{3})$/);
+  if (m) return '#' + m[1].split('').map(ch => ch + ch).join('');
+  if (/^#[0-9a-f]{6}$/.test(s)) return s;
+  m = s.match(/^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*[\d.]+)?\s*\)$/);
+  if (m) return '#' + [1, 2, 3].map(i => Math.max(0, Math.min(255, Number(m[i]))).toString(16).padStart(2, '0')).join('');
+  return fb;
+}
+
+/* A color control = native picker + synced hex text field. The text field
+   is the value of record (stored + submitted); both render as hex. */
+function colorFieldHtml(id, value) {
+  const hex = value ? normalizeColorJs(value) : '';
+  return `<span style="display:flex;gap:8px;align-items:center">
+    <input type="color" id="${id}" value="${esc(hex || '#8b5cf6')}" style="height:42px;padding:4px;flex:0 0 60px">
+    <input type="text" id="${id}-txt" value="${esc(hex)}" placeholder="#rrggbb" spellcheck="false" style="flex:1;font-family:monospace">
+  </span>`;
+}
+function wireColorField(id) {
+  const picker = document.getElementById(id), txt = document.getElementById(id + '-txt');
+  if (!picker || !txt) return;
+  picker.addEventListener('input', () => { txt.value = picker.value; });
+  txt.addEventListener('input', () => {
+    const raw = txt.value.trim();
+    if (/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(raw) || /^rgba?\(/i.test(raw)) picker.value = normalizeColorJs(raw);
+  });
+  txt.addEventListener('change', () => { txt.value = normalizeColorJs(txt.value, picker.value); picker.value = txt.value; });
+}
+function colorFieldValue(id) {
+  const txt = document.getElementById(id + '-txt');
+  return normalizeColorJs(txt ? txt.value : '');
+}
+
 const AdminView = {
   tax: { categories: [], services: [] },
   groups: [],
@@ -19,9 +59,9 @@ const AdminView = {
       ['demo', '🧪 Demo Content'], ['users', '👥 Users'], ['viewas', '👁 View As'], ['settings', '⚙️ Settings'],
     ];
     app.innerHTML = `
-      <div class="crumbs"><a href="#/">Knowledge Base</a> › Staff Dashboard</div>
+      <div class="crumbs"><a href="/">Knowledge Base</a> › Staff Dashboard</div>
       <div class="admin-layout">
-        <aside class="admin-nav">${nav.map(([k, l]) => `<a href="#/admin/${k}" data-av="${k}">${l}</a>`).join('')}</aside>
+        <aside class="admin-nav">${nav.map(([k, l]) => `<a href="/admin/${k}" data-av="${k}">${l}</a>`).join('')}</aside>
         <div id="admin-main"></div>
       </div>`;
     app.querySelectorAll('.admin-nav a').forEach(a => a.classList.toggle('active', a.dataset.av === view));
@@ -82,14 +122,14 @@ const AdminView = {
         <div class="panel"><h3>Feedback score</h3>
           <div style="font-size:2rem;font-weight:800">${d.feedback_score === null ? '—' : d.feedback_score + '%'}</div>
           <div style="color:var(--muted);font-size:.82rem">${d.feedback_votes} votes · “Was this helpful?”</div>
-          <div style="margin-top:10px"><a class="btn ghost small" href="#/admin/feedback">Open feedback inbox</a></div>
+          <div style="margin-top:10px"><a class="btn ghost small" href="/admin/feedback">Open feedback inbox</a></div>
         </div>
         <div class="panel"><h3>Quick actions</h3>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
-            <a class="btn small" href="#/admin/article/new">＋ New article</a>
-            <a class="btn ghost small" href="#/admin/customers">＋ New customer</a>
-            <a class="btn ghost small" href="#/admin/media">Upload media</a>
-            <a class="btn ghost small" href="#/admin/backup">☁️ Backup now</a>
+            <a class="btn small" href="/admin/article/new">＋ New article</a>
+            <a class="btn ghost small" href="/admin/customers">＋ New customer</a>
+            <a class="btn ghost small" href="/admin/media">Upload media</a>
+            <a class="btn ghost small" href="/admin/backup">☁️ Backup now</a>
             <button class="btn ghost small" id="q-export">Export JSON</button>
           </div>
         </div>
@@ -109,7 +149,7 @@ const AdminView = {
     main.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
         <h2 style="margin:0">Articles</h2>
-        <a class="btn small" href="#/admin/article/new">＋ New article</a>
+        <a class="btn small" href="/admin/article/new">＋ New article</a>
       </div>
       <div class="toolbar" style="margin-top:12px">
         <input type="text" id="f-q" placeholder="Search title/slug…" style="max-width:220px">
@@ -138,15 +178,15 @@ const AdminView = {
     const rowHtml = (a) => `
         <tr>
           <td><input type="checkbox" class="sel" value="${a.id}"></td>
-          <td><a href="#/admin/article/${a.id}" style="color:var(--text);font-weight:600">${esc(a.title)}</a><br><small style="color:var(--muted2)">/${esc(a.slug)}</small></td>
+          <td><a href="/admin/article/${a.id}" style="color:var(--text);font-weight:600">${esc(a.title)}</a><br><small style="color:var(--muted2)">/${esc(a.slug)}</small></td>
           <td><span class="pill ${a.status}">${a.status}</span>${a.featured ? ' ⭐' : ''}</td>
           <td>${this.visPill(a.visibility)}${a.visibility === 'groups' ? `<div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap">${(a.groups || []).map(g => `<span class="pill" style="background:${esc(g.color || '#8B5CF6')}22;color:${esc(g.color || '#8B5CF6')}">${esc(g.name)}</span>`).join('') || '<span style="color:var(--red);font-size:.75rem">no group!</span>'}</div>` : ''}</td>
           <td>${a.views}</td>
           <td style="white-space:nowrap">${timeAgo(a.updated_at)}</td>
           <td style="white-space:nowrap">
             ${a.status === 'draft' ? `<button class="link-btn" data-pub="${a.id}" style="color:var(--green);font-weight:700">Publish</button> · ` : ''}
-            <a class="link-btn" href="#/article/${esc(a.slug)}" target="_blank">View</a> ·
-            <a class="link-btn" href="#/admin/versions/${a.id}">History</a> ·
+            <a class="link-btn" href="/article/${esc(a.slug)}" target="_blank">View</a> ·
+            <a class="link-btn" href="/admin/versions/${a.id}">History</a> ·
             <button class="link-btn" data-del="${a.id}" style="color:var(--red)">Delete</button>
           </td>
         </tr>`;
@@ -187,7 +227,7 @@ const AdminView = {
       </section>`).join('') || '<div class="empty" style="padding:26px;text-align:center;color:var(--muted)">No articles match these filters.</div>';
       wrap.querySelectorAll('[data-edit-cat]').forEach(b => b.onclick = () => {
         try { sessionStorage.setItem('xcwiki_edit_category', b.dataset.editCat); } catch { /* storage unavailable */ }
-        location.hash = '#/admin/categories';
+        navigate('/admin/categories');
       });
       wrap.querySelectorAll('[data-pub]').forEach(b => b.onclick = async () => {
         try {
@@ -346,12 +386,12 @@ const AdminView = {
     const vis = a?.visibility || 'all';
     const selGroups = new Set(a?.group_ids || []);
     main.innerHTML = `
-      <div class="crumbs"><a href="#/admin/articles">Articles</a> › ${isNew ? 'New' : 'Edit'}</div>
+      <div class="crumbs"><a href="/admin/articles">Articles</a> › ${isNew ? 'New' : 'Edit'}</div>
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
         <h2 style="margin:0">${isNew ? 'New article' : 'Edit article'}</h2>
         <div style="display:flex;gap:8px">
-          ${!isNew ? `<a class="btn ghost small" href="#/admin/versions/${a.id}">🕘 History</a>
-          <a class="btn ghost small" href="#/article/${esc(a.slug)}" target="_blank">View live</a>` : ''}
+          ${!isNew ? `<a class="btn ghost small" href="/admin/versions/${a.id}">🕘 History</a>
+          <a class="btn ghost small" href="/article/${esc(a.slug)}" target="_blank">View live</a>` : ''}
           ${isNew ? '<button class="btn ghost small" id="ed-draft">Save as draft</button>' : ''}
           <button class="btn small" id="ed-save">${isNew ? '💾 Save & Publish' : '💾 Save'}</button>
         </div>
@@ -371,7 +411,7 @@ const AdminView = {
         <div class="check-row"><input type="radio" name="ed-vis" value="all" id="ev-all" ${vis === 'all' ? 'checked' : ''}> <label for="ev-all"><strong>Everyone</strong> — public, including anonymous visitors</label></div>
         <div class="check-row"><input type="radio" name="ed-vis" value="groups" id="ev-groups" ${vis === 'groups' ? 'checked' : ''}> <label for="ev-groups"><strong>Customer groups</strong> — only signed-in customers in the selected groups</label></div>
         <div id="ev-pick" style="margin:6px 0 6px 26px;display:${vis === 'groups' ? 'flex' : 'none'};flex-wrap:wrap;gap:6px">
-          ${this.groups.map(g => `<label class="chip-pick"><input type="checkbox" class="ed-group" value="${g.id}" ${selGroups.has(g.id) ? 'checked' : ''}> ${esc(g.name)}</label>`).join('') || '<small style="color:var(--muted)">No groups yet — <a href="#/admin/groups">create one</a> first.</small>'}
+          ${this.groups.map(g => `<label class="chip-pick"><input type="checkbox" class="ed-group" value="${g.id}" ${selGroups.has(g.id) ? 'checked' : ''}> ${esc(g.name)}</label>`).join('') || '<small style="color:var(--muted)">No groups yet — <a href="/admin/groups">create one</a> first.</small>'}
         </div>
         <div class="check-row"><input type="radio" name="ed-vis" value="staff" id="ev-staff" ${vis === 'staff' ? 'checked' : ''}> <label for="ev-staff"><strong>Staff only</strong> — hidden from every reader</label></div>
       </div>
@@ -432,7 +472,7 @@ const AdminView = {
           } else {
             toast(status === 'published' ? 'Article published' : 'Article saved as draft', 'ok');
           }
-          location.hash = '#/admin/article/' + d.id;
+          navigate('/admin/article/' + d.id);
         } else {
           await api('/api/admin/articles/' + id, { method: 'PUT', body: JSON.stringify(payload) });
           toast('Article saved — new version recorded', 'ok');
@@ -452,7 +492,7 @@ const AdminView = {
       api(`/api/admin/articles/${id}/versions`),
     ]);
     main.innerHTML = `
-      <div class="crumbs"><a href="#/admin/articles">Articles</a> › <a href="#/admin/article/${id}">${esc(a.title)}</a> › History</div>
+      <div class="crumbs"><a href="/admin/articles">Articles</a> › <a href="/admin/article/${id}">${esc(a.title)}</a> › History</div>
       <h2 style="margin-top:6px">Revision history</h2>
       <p style="color:var(--muted);font-size:.85rem">Every save creates a version. Compare any two, or roll back with one click.</p>
       <div id="ver-list">
@@ -487,16 +527,25 @@ const AdminView = {
     const title = kind === 'categories' ? 'Categories' : 'Services';
     const rows = kind === 'categories' ? this.tax.categories : this.tax.services;
     const isCat = kind === 'categories';
+    const restrictionText = (r) => {
+      const sn = (r.restrict_service_ids || []).map(id => (this.tax.services.find(s => s.id === id) || {}).name).filter(Boolean);
+      const gn = (r.restrict_group_ids || []).map(id => (this.groups.find(g => g.id === id) || {}).name).filter(Boolean);
+      const parts = [];
+      if (sn.length) parts.push('Services: ' + sn.join(', '));
+      if (gn.length) parts.push('Groups: ' + gn.join(', '));
+      return parts.length ? '🔒 ' + parts.join(' · ') : 'Unrestricted';
+    };
     main.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center"><h2 style="margin:0">${title}</h2>
       <button class="btn small" id="tx-new">＋ New</button></div>
       ${isCat ? '<p style="color:var(--muted);font-size:.85rem">A <strong>staff-only</strong> category (and everything in it) is hidden from all readers.</p>' : ''}
-      <div style="overflow-x:auto;margin-top:12px"><table class="tbl"><thead><tr><th></th><th>Name</th><th>Slug</th><th>Description</th>${isCat ? '<th>Visibility</th>' : ''}<th>Order</th><th></th></tr></thead>
+      ${isCat ? '' : '<p style="color:var(--muted);font-size:.85rem">A service can be mapped to a customer group: everyone who holds the service is automatically added to that group (adding never removes anyone).</p>'}
+      <div style="overflow-x:auto;margin-top:12px"><table class="tbl"><thead><tr><th></th><th>Name</th><th>Slug</th><th>Description</th>${isCat ? '<th>Visibility</th>' : '<th>Auto-adds group</th>'}<th>Order</th><th></th></tr></thead>
       <tbody>${rows.map(r => `
-        <tr><td>${isCat && (r.cover_image || r.icon_image) ? `<img src="${esc(r.cover_image || r.icon_image)}" style="width:52px;height:32px;object-fit:cover;border-radius:6px;vertical-align:middle">` : `<span style="background:${esc(r.color)}22;border-radius:8px;padding:4px 8px">${esc(r.icon)}</span>`}</td>
-        <td><strong>${esc(r.name)}</strong></td><td style="color:var(--muted2)">/${esc(r.slug)}</td>
+        <tr><td>${isCat && (r.cover_image || r.icon_image) ? `<img src="${esc(r.cover_image || r.icon_image)}" style="width:52px;height:32px;object-fit:cover;border-radius:6px;vertical-align:middle">` : `<span style="background:${esc(normalizeColorJs(r.color))}22;border-radius:8px;padding:4px 8px">${esc(r.icon)}</span>`}</td>
+        <td><strong>${esc(r.name)}</strong>${isCat ? `<br><small style="color:var(--muted2)">${esc(restrictionText(r))}</small>` : ''}</td><td style="color:var(--muted2)">/${esc(r.slug)}</td>
         <td style="color:var(--muted)">${esc(r.description || '')}</td>
-        ${isCat ? `<td>${this.visPill(r.visibility === 'staff' ? 'staff' : 'all')}</td>` : ''}
+        ${isCat ? `<td>${this.visPill(r.visibility === 'staff' ? 'staff' : 'all')}</td>` : `<td>${r.group_id ? esc((this.groups.find(g => g.id === r.group_id) || {}).name || '—') : '<span style="color:var(--muted2)">—</span>'}</td>`}
         <td>${r.sort_order}</td>
         <td style="white-space:nowrap"><button class="link-btn" data-edit="${r.id}">Edit</button> · <button class="link-btn" data-del="${r.id}" style="color:var(--red)">Delete</button></td></tr>`).join('')}
       </tbody></table></div>
@@ -512,9 +561,12 @@ const AdminView = {
         <label class="fld"><span>Description</span><input id="tx-desc" value="${esc(r?.description || '')}"></label>
         <div class="form-row3">
           <label class="fld"><span>Icon (emoji)</span><input id="tx-icon" value="${esc(r?.icon || '📄')}" maxlength="8"></label>
-          <label class="fld"><span>Color</span><input id="tx-color" type="color" value="${esc(r?.color || '#3B82F6')}" style="height:42px;padding:4px"></label>
+          <label class="fld"><span>Color (hex)</span>${colorFieldHtml('tx-color', r?.color || '#3B82F6')}</label>
           <label class="fld"><span>Sort order</span><input id="tx-order" type="number" value="${r?.sort_order ?? 0}"></label>
         </div>
+        ${isCat ? '' : `
+        <label class="fld"><span>Auto-add holders to group <small style="color:var(--muted)">(customers with this service join the group automatically — never removed)</small></span>
+          <select id="tx-group"><option value="">— none —</option>${this.groups.map(g => `<option value="${g.id}" ${r?.group_id === g.id ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}</select></label>`}
         ${isCat ? `
         <label class="fld"><span>Cover image <small style="color:var(--muted)">(BookStack-style book cover — becomes the category's lead visual on cards and listings; the emoji icon is only a fallback when no cover is set)</small></span>
           <span style="display:flex;gap:8px;align-items:center">
@@ -531,10 +583,17 @@ const AdminView = {
             <option value="all" ${(r?.visibility || 'all') === 'all' ? 'selected' : ''}>🌍 Everyone</option>
             <option value="staff" ${r?.visibility === 'staff' ? 'selected' : ''}>🔒 Staff only</option>
           </select></label>
+        </div>
+        <div class="form-row">
+          <label class="fld"><span>Restrict to services <small style="color:var(--muted)">(empty = no restriction; a customer needs at least one of these services to see this category and its articles)</small></span>
+            <span style="display:flex;gap:6px;flex-wrap:wrap">${this.tax.services.map(s => `<label class="chip-pick"><input type="checkbox" class="tx-rsvc" value="${s.id}" ${(r?.restrict_service_ids || []).includes(s.id) ? 'checked' : ''}> ${esc(s.name)}</label>`).join('') || '<small style="color:var(--muted)">No services yet.</small>'}</span></label>
+          <label class="fld"><span>Restrict to groups <small style="color:var(--muted)">(empty = no restriction; a customer must belong to at least one of these groups — when both are set, both must pass)</small></span>
+            <span style="display:flex;gap:6px;flex-wrap:wrap">${this.groups.map(g => `<label class="chip-pick"><input type="checkbox" class="tx-rgrp" value="${g.id}" ${(r?.restrict_group_ids || []).includes(g.id) ? 'checked' : ''}> ${esc(g.name)}</label>`).join('') || '<small style="color:var(--muted)">No groups yet.</small>'}</span></label>
         </div>` : ''}
         <div style="display:flex;gap:8px"><button class="btn small" id="tx-save">Save</button><button class="btn ghost small" id="tx-cancel">Cancel</button></div>
         </div>`;
       document.getElementById('tx-cancel').onclick = () => this.taxManager(main, kind);
+      wireColorField('tx-color');
       if (isCat) {
         const coverInput = document.getElementById('tx-coverimg');
         const coverPrev = document.getElementById('tx-coverprev');
@@ -555,15 +614,21 @@ const AdminView = {
           slug: document.getElementById('tx-slug').value,
           description: document.getElementById('tx-desc').value,
           icon: document.getElementById('tx-icon').value,
-          color: document.getElementById('tx-color').value,
+          color: colorFieldValue('tx-color'),
           sort_order: Number(document.getElementById('tx-order').value) || 0,
         };
+        if (!isCat) {
+          const gv = document.getElementById('tx-group').value;
+          payload.group_id = gv ? Number(gv) : null;
+        }
         if (isCat) {
           payload.cover_image = document.getElementById('tx-coverimg').value.trim();
           payload.icon_image = '';
           const p = document.getElementById('tx-parent');
           payload.parent_id = p && p.value ? Number(p.value) : null;
           payload.visibility = document.getElementById('tx-vis').value === 'staff' ? 'staff' : 'all';
+          payload.restrict_service_ids = [...document.querySelectorAll('.tx-rsvc:checked')].map(x => Number(x.value));
+          payload.restrict_group_ids = [...document.querySelectorAll('.tx-rgrp:checked')].map(x => Number(x.value));
         }
         try {
           if (r) await api(`/api/admin/${kind}/${r.id}`, { method: 'PUT', body: JSON.stringify(payload) });
@@ -818,10 +883,10 @@ const AdminView = {
       ${rows.map(r => {
         const total = r.helpful_yes + r.helpful_no;
         const pct = total ? Math.round(r.helpful_yes / total * 100) : 100;
-        return `<tr><td><a href="#/article/${esc(r.slug)}" style="color:var(--text);font-weight:600">${esc(r.title)}</a></td>
+        return `<tr><td><a href="/article/${esc(r.slug)}" style="color:var(--text);font-weight:600">${esc(r.title)}</a></td>
         <td>${r.helpful_yes}</td><td>${r.helpful_no}</td>
         <td><div class="progress" style="width:120px"><div style="width:${pct}%;background:${pct >= 80 ? 'var(--green)' : pct >= 50 ? 'var(--amber)' : 'var(--red)'}"></div></div> ${pct}%</td>
-        <td><a class="link-btn" href="#/admin/article/${r.id}">Edit</a></td></tr>`;
+        <td><a class="link-btn" href="/admin/article/${r.id}">Edit</a></td></tr>`;
       }).join('') || '<tr><td colspan="5" class="empty">No feedback yet.</td></tr>'}
       </tbody></table>`;
   },
@@ -860,18 +925,20 @@ const AdminView = {
       </div>
       <div class="toolbar" id="c-bulkbar" style="display:none">
         <span id="c-bulkcount" style="font-size:.85rem;color:var(--muted)"></span>
-        <select id="c-bulkgroup" style="max-width:180px"><option value="">Remove from group</option>${this.groups.map(g => `<option value="${g.id}">${esc(g.name)}</option>`).join('')}</select>
-        <button class="btn ghost small" id="c-bulkgo">Assign group</button>
+        <select id="c-bulkgroup" style="max-width:180px"><option value="">Clear all groups</option>${this.groups.map(g => `<option value="${g.id}">${esc(g.name)}</option>`).join('')}</select>
+        <button class="btn ghost small" id="c-bulkgo">Apply group</button>
         <button class="btn ghost small" data-cbulk="invite">✉ Send setup email</button>
+        <button class="btn ghost small" data-cbulk="welcome">📩 Send welcome to pending</button>
         <button class="btn ghost small" data-cbulk="reset-password">↺ Reset passwords</button>
         <button class="btn ghost small" data-cbulk="disable">Disable</button>
         <button class="btn ghost small" data-cbulk="enable">Enable</button>
         <button class="btn danger small" data-cbulk="delete">Delete</button>
       </div>
       <div style="overflow-x:auto"><table class="tbl"><thead><tr>
-        <th><input type="checkbox" id="c-selall"></th><th>Name</th><th>Email</th><th>Group</th><th>Status</th><th>Last login</th><th></th>
+        <th><input type="checkbox" id="c-selall"></th><th>Name</th><th>Email</th><th>Groups</th><th>Services</th><th>Status</th><th>Last login</th><th></th>
       </tr></thead><tbody id="c-rows"></tbody></table></div>
-      <div id="c-form"></div>`;
+      <div id="c-form"></div>
+      <div id="c-invites" style="margin-top:18px"></div>`;
 
     const load = async () => {
       const q = new URLSearchParams();
@@ -880,21 +947,23 @@ const AdminView = {
       if (v('c-group')) q.set('group_id', v('c-group') === 'none' ? '0' : v('c-group'));
       if (v('c-status')) q.set('disabled', v('c-status'));
       let rows = await api('/api/admin/customers?' + q.toString());
-      if (v('c-group') === 'none') rows = rows.filter(r => !r.group_id);
+      if (v('c-group') === 'none') rows = rows.filter(r => !(r.groups && r.groups.length));
       const tb = document.getElementById('c-rows');
       tb.innerHTML = rows.map(c => `
         <tr>
           <td><input type="checkbox" class="c-sel" value="${c.id}"></td>
           <td><strong>${esc(c.name)}</strong>${c.company ? `<br><small style="color:var(--muted2)">${esc(c.company)}</small>` : ''}</td>
           <td style="color:var(--muted)">${esc(c.email)}</td>
-          <td>${c.group_name ? `<span class="pill" style="background:${esc(c.group_color || '#8B5CF6')}22;color:${esc(c.group_color || '#8B5CF6')}">${esc(c.group_name)}</span>` : '<span style="color:var(--muted2)">—</span>'}</td>
-          <td>${c.disabled ? '<span class="pill archived">disabled</span>' : '<span class="pill published">active</span>'}</td>
+          <td>${(c.groups && c.groups.length) ? c.groups.map(g => `<span class="pill" style="background:${esc(g.color || '#8b5cf6')}22;color:${esc(g.color || '#8b5cf6')}">${esc(g.name)}</span>`).join(' ') : '<span style="color:var(--muted2)">—</span>'}</td>
+          <td>${(c.services && c.services.length) ? `<span style="font-size:.82rem">${c.services.map(s => esc(s.name)).join(', ')}</span>` : '<span style="color:var(--muted2)">—</span>'}</td>
+          <td>${c.disabled ? '<span class="pill archived">disabled</span>' : '<span class="pill published">active</span>'}${c.has_password === false ? ' <span class="pill" title="No password set yet — pending setup">pending setup</span>' : ''}</td>
           <td style="white-space:nowrap">${c.last_login_at ? timeAgo(c.last_login_at) : '<span style="color:var(--muted2)">never</span>'}</td>
           <td style="white-space:nowrap"><button class="link-btn" data-cinv="${c.id}">🔗 Setup link</button> ·
+          <button class="link-btn" data-cwelcome="${c.id}">📩 Welcome</button> ·
           <button class="link-btn" data-cedit="${c.id}">Edit</button> ·
           <button class="link-btn" data-cdis="${c.id}">${c.disabled ? 'Enable' : 'Disable'}</button> ·
           <button class="link-btn" data-cdel="${c.id}" style="color:var(--red)">Delete</button></td>
-        </tr>`).join('') || '<tr><td colspan="7" class="empty">No customers.</td></tr>';
+        </tr>`).join('') || '<tr><td colspan="9" class="empty">No customers.</td></tr>';
       tb.querySelectorAll('[data-cinv]').forEach(b => b.onclick = async () => {
         const row = rows.find(r => String(r.id) === b.dataset.cinv);
         try {
@@ -905,6 +974,26 @@ const AdminView = {
               ? `✉ Emailed to <strong>${esc(row.email)}</strong> — the link works for 72 hours. You can also share it manually:`
               : `Email was not sent (${esc(r.reason === 'smtp-not-configured' ? 'SMTP is not configured in Settings → Email' : 'delivery failed')}). Give <strong>${esc(row.email)}</strong> this link — it works for 72 hours:`}</p>
             <label class="fld"><span>Setup link</span><input id="inv-link" readonly value="${esc(r.link)}"></label>
+            <div style="display:flex;gap:8px;margin-top:10px"><button class="btn small" id="inv-copy">Copy link</button><button class="btn ghost small" id="inv-close">Close</button></div>
+          </div>`);
+          document.getElementById('inv-copy').onclick = async () => {
+            const inp = document.getElementById('inv-link');
+            inp.select();
+            try { await navigator.clipboard.writeText(inp.value); toast('Link copied', 'ok'); } catch { document.execCommand('copy'); }
+          };
+          document.getElementById('inv-close').onclick = () => closeModal();
+        } catch (e) { toast(e.message, 'err'); }
+      });
+      tb.querySelectorAll('[data-cwelcome]').forEach(b => b.onclick = async () => {
+        const row = rows.find(r => String(r.id) === b.dataset.cwelcome);
+        try {
+          const r = await api('/api/admin/customers/' + b.dataset.cwelcome + '/welcome', { method: 'POST', body: JSON.stringify({}) });
+          openModal(`<div style="padding:20px;max-width:560px">
+            <h3 style="margin-top:0">📩 Welcome email</h3>
+            <p style="color:var(--muted);font-size:.88rem">${r.emailed
+              ? `✉ Welcome email sent to <strong>${esc(row.email)}</strong> — the setup link inside works for 72 hours. You can also share it manually:`
+              : `Email was not sent (${esc(r.reason === 'smtp-not-configured' ? 'SMTP is not configured in Settings → Email' : 'delivery failed')}). Give <strong>${esc(row.email)}</strong> this link — it works for 72 hours:`}</p>
+            <label class="fld"><span>Welcome / setup link</span><input id="inv-link" readonly value="${esc(r.link)}"></label>
             <div style="display:flex;gap:8px;margin-top:10px"><button class="btn small" id="inv-copy">Copy link</button><button class="btn ghost small" id="inv-close">Close</button></div>
           </div>`);
           document.getElementById('inv-copy').onclick = async () => {
@@ -950,11 +1039,11 @@ const AdminView = {
       const ids = [...document.querySelectorAll('.c-sel:checked')].map(c => Number(c.value));
       if (!ids.length) return;
       const action = b.dataset.cbulk;
-      const labels = { invite: 'send password-setup emails to', 'reset-password': 'reset passwords for', disable: 'disable', enable: 'enable', delete: 'DELETE' };
+      const labels = { invite: 'send password-setup emails to', welcome: 'send welcome emails to the pending (password-less) customers among', 'reset-password': 'reset passwords for', disable: 'disable', enable: 'enable', delete: 'DELETE' };
       if (!confirm(`${labels[action]} ${ids.length} selected customer(s)?`)) return;
       try {
         const r = await api('/api/admin/customers/bulk-action', { method: 'POST', body: JSON.stringify({ ids, action }) });
-        if ((action === 'invite' || action === 'reset-password') && r.results.some(x => x.link && !x.emailed)) {
+        if ((action === 'invite' || action === 'reset-password' || action === 'welcome') && r.results.some(x => x.link && !x.emailed)) {
           const list = r.results.filter(x => x.link).map(x => `${x.email} — ${x.emailed ? '✉ emailed' : '🔗 ' + x.link}`).join('\n');
           openModal(`<div style="padding:20px;max-width:640px"><h3 style="margin-top:0">Password setup links</h3>
             <p style="color:var(--muted);font-size:.88rem">${r.affected} processed. Links marked 🔗 were not emailed (SMTP off or delivery failed) — share them manually; each works for 72 hours.</p>
@@ -966,6 +1055,75 @@ const AdminView = {
         load();
       } catch (e) { toast(e.message, 'err'); }
     });
+
+    /* ---- Invites panel: create + track password-setup invites ---- */
+    const statusPill = (s) => s === 'accepted'
+      ? '<span class="pill published">accepted</span>'
+      : s === 'expired' ? '<span class="pill archived">expired</span>' : '<span class="pill">pending</span>';
+    const renderInvites = async () => {
+      const box = document.getElementById('c-invites');
+      if (!box) return;
+      let invites = [];
+      try { invites = await api('/api/admin/invites'); } catch { invites = []; }
+      box.innerHTML = `
+        <div class="panel"><h3 style="margin-top:0">✉ Invites</h3>
+          <p style="color:var(--muted);font-size:.85rem">Invite someone by name + email and the services they get. They receive an email link to set their own password; services that map to a group also add them to that group automatically.</p>
+          <div class="form-row">
+            <label class="fld"><span>Full name</span><input id="iv-name" placeholder="Jane Example"></label>
+            <label class="fld"><span>Email</span><input id="iv-email" type="email" placeholder="jane@example.com"></label>
+          </div>
+          <label class="fld"><span>Services</span>
+            <span style="display:flex;gap:6px;flex-wrap:wrap">${(this.tax.services || []).map(s => `<label class="chip-pick"><input type="checkbox" class="iv-svc" value="${s.id}"> ${esc(s.name)}</label>`).join('') || '<small style="color:var(--muted)">No services yet.</small>'}</span></label>
+          <div style="display:flex;gap:8px;align-items:center"><button class="btn small" id="iv-create">✉ Create & send invite</button><span id="iv-out" style="font-size:.85rem"></span></div>
+          <div style="overflow-x:auto;margin-top:14px"><table class="tbl"><thead><tr><th>Name</th><th>Email</th><th>Services</th><th>Status</th><th>Sent</th><th>Expires</th><th></th></tr></thead>
+          <tbody>${invites.map(iv => `
+            <tr><td><strong>${esc(iv.name)}</strong></td><td style="color:var(--muted)">${esc(iv.email)}</td>
+            <td style="font-size:.82rem">${(iv.services || []).map(s => esc(s.name)).join(', ') || '—'}</td>
+            <td>${statusPill(iv.status)}</td>
+            <td style="white-space:nowrap">${iv.created_at ? timeAgo(iv.created_at) : ''}</td>
+            <td style="white-space:nowrap">${iv.expires_at ? timeAgo(iv.expires_at) : ''}</td>
+            <td style="white-space:nowrap">${iv.link
+              ? `<button class="link-btn" data-ivcopy="${iv.customer_id}">📋 Copy invite link</button>`
+              : '<span style="color:var(--muted2);font-size:.8rem" title="This invite predates stored links">link unavailable — resend to regenerate one</span>'}
+              · <button class="link-btn" data-ivresend="${iv.customer_id}">↻ Resend</button></td></tr>`).join('') || '<tr><td colspan="7" class="empty">No invites yet.</td></tr>'}
+          </tbody></table></div>
+        </div>`;
+      const links = new Map(invites.filter(i => i.link).map(i => [String(i.customer_id), i.link]));
+      box.querySelectorAll('[data-ivcopy]').forEach(b => b.onclick = async () => {
+        const link = links.get(b.dataset.ivcopy);
+        if (!link) return;
+        try { await navigator.clipboard.writeText(link); toast('Invite link copied', 'ok'); }
+        catch {
+          openModal(`<div style="padding:20px;max-width:560px"><h3 style="margin-top:0">Invite link</h3>
+            <label class="fld"><span>Copy this link</span><input readonly value="${esc(link)}" onfocus="this.select()"></label>
+            <div style="margin-top:10px"><button class="btn small" onclick="closeModal()">Done</button></div></div>`);
+        }
+      });
+      box.querySelectorAll('[data-ivresend]').forEach(b => b.onclick = async () => {
+        try {
+          const r = await api('/api/admin/invites/' + b.dataset.ivresend + '/resend', { method: 'POST', body: JSON.stringify({}) });
+          toast(r.emailed ? 'Invite re-sent' : 'Invite regenerated — copy the new link (email not sent)', r.emailed ? 'ok' : 'err');
+          renderInvites();
+        } catch (e) { toast(e.message, 'err'); }
+      });
+      document.getElementById('iv-create').onclick = async () => {
+        const out = document.getElementById('iv-out');
+        const payload = {
+          name: document.getElementById('iv-name').value,
+          email: document.getElementById('iv-email').value,
+          service_ids: [...box.querySelectorAll('.iv-svc:checked')].map(x => Number(x.value)),
+        };
+        try {
+          const r = await api('/api/admin/invites', { method: 'POST', body: JSON.stringify(payload) });
+          out.innerHTML = r.invite && r.invite.emailed
+            ? '✉ Invite emailed — it will appear below as pending.'
+            : `🔗 Created — email not sent, copy the link from the list below.`;
+          toast('Invite created', 'ok');
+          renderInvites(); load();
+        } catch (e) { out.innerHTML = '❌ ' + esc(e.message); }
+      };
+    };
+    renderInvites();
     await load();
   },
 
@@ -977,11 +1135,14 @@ const AdminView = {
         <label class="fld"><span>Full name *</span><input id="cf-name" value="${esc(c?.name || '')}"></label>
         <label class="fld"><span>Email *</span><input id="cf-email" type="email" value="${esc(c?.email || '')}"></label>
       </div>
-      <div class="form-row3">
+      <div class="form-row">
         <label class="fld"><span>Company</span><input id="cf-company" value="${esc(c?.company || '')}"></label>
         <label class="fld"><span>Phone</span><input id="cf-phone" value="${esc(c?.phone || '')}"></label>
-        <label class="fld"><span>Group</span><select id="cf-group"><option value="">No group</option>${this.groups.map(g => `<option value="${g.id}" ${c?.group_id === g.id ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}</select></label>
       </div>
+      <label class="fld"><span>Groups <small style="color:var(--muted)">(tick all that apply — group-restricted articles are visible to members of any of them)</small></span>
+        <span style="display:flex;gap:6px;flex-wrap:wrap">${this.groups.map(g => `<label class="chip-pick"><input type="checkbox" class="cf-group" value="${g.id}" ${(c?.groups || []).some(x => x.id === g.id) || c?.group_id === g.id ? 'checked' : ''}> <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${esc(normalizeColorJs(g.color))}"></span> ${esc(g.name)}</label>`).join('') || '<small style="color:var(--muted)">No groups yet.</small>'}</span></label>
+      <label class="fld"><span>Services <small style="color:var(--muted)">(a service mapped to a group also adds the customer to that group)</small></span>
+        <span style="display:flex;gap:6px;flex-wrap:wrap">${(this.tax.services || []).map(s => `<label class="chip-pick"><input type="checkbox" class="cf-svc" value="${s.id}" ${(c?.services || []).some(x => x.id === s.id) ? 'checked' : ''}> ${esc(s.name)}</label>`).join('') || '<small style="color:var(--muted)">No services yet.</small>'}</span></label>
       <label class="fld"><span>Notes (staff only)</span><textarea id="cf-notes" rows="2">${esc(c?.notes || '')}</textarea></label>
       <label class="fld"><span>${c ? 'Reset password (blank = keep current)' : 'Password (blank = auto-generated, shown once)'}</span><input id="cf-pass" type="text" placeholder="${c ? '—' : 'auto-generate'}"></label>
       ${c ? '<div style="margin-top:6px"><button class="btn ghost small" id="cf-resetlink" type="button">✉ Email a password reset link</button> <span style="color:var(--muted);font-size:.8rem">They set a new password themselves; their sessions are signed out.</span></div>'
@@ -1006,7 +1167,8 @@ const AdminView = {
         company: document.getElementById('cf-company').value,
         phone: document.getElementById('cf-phone').value,
         notes: document.getElementById('cf-notes').value,
-        group_id: document.getElementById('cf-group').value || null,
+        group_ids: [...box.querySelectorAll('.cf-group:checked')].map(x => Number(x.value)),
+        service_ids: [...box.querySelectorAll('.cf-svc:checked')].map(x => Number(x.value)),
       };
       const pw = document.getElementById('cf-pass').value;
       if (pw) payload.password = pw;
@@ -1053,12 +1215,8 @@ const AdminView = {
       <div id="ci-step3" style="display:none"></div>
     </div>`);
     document.getElementById('ci-template').onclick = () => {
-      const csv = 'name,email,company,phone,group,notes\nPriya Sharma,priya@example.com,Sharma Media Co.,555-0100,Premium,Imported from spreadsheet\n';
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-      a.download = 'xc-wiki-customers-template.csv';
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+      // served by the API (session cookie auth) with the exact importer headers
+      window.location = '/api/admin/customers/import/template';
     };
     document.getElementById('ci-file').onchange = async (e) => {
       const f = e.target.files[0];
@@ -1087,7 +1245,7 @@ const AdminView = {
       const header = hasHeader ? rows[0] : rows[0].map((_, i) => 'Column ' + (i + 1));
       const dataRows = hasHeader ? rows.slice(1) : rows;
       const nCols = Math.max(...rows.map(r => r.length));
-      const fields = [['name', 'Full name *'], ['email', 'Email *'], ['company', 'Company'], ['phone', 'Phone'], ['group', 'Group (by name)'], ['notes', 'Notes']];
+      const fields = [['name', 'Full name *'], ['email', 'Email *'], ['company', 'Company'], ['phone', 'Phone'], ['notes', 'Notes'], ['group', 'Group (by name)'], ['services', 'Services (names, ;-separated)']];
       // auto-guess mapping from header names
       const guess = {};
       header.forEach((h, i) => {
@@ -1170,7 +1328,7 @@ const AdminView = {
       <p style="color:var(--muted);font-size:.85rem">Group articles by audience: set an article's visibility to “Customer groups” and pick which groups may read it.</p>
       <div style="overflow-x:auto;margin-top:12px"><table class="tbl"><thead><tr><th></th><th>Name</th><th>Slug</th><th>Customers</th><th>Description</th><th></th></tr></thead>
       <tbody>${rows.map(g => `
-        <tr><td><span style="background:${esc(g.color)}22;color:${esc(g.color)};border-radius:8px;padding:4px 10px;font-weight:700">${esc(g.name.slice(0, 2).toUpperCase())}</span></td>
+        <tr><td><span style="background:${esc(normalizeColorJs(g.color))}22;color:${esc(normalizeColorJs(g.color))};border-radius:8px;padding:4px 10px;font-weight:700">${esc(g.name.slice(0, 2).toUpperCase())}</span></td>
         <td><strong>${esc(g.name)}</strong></td><td style="color:var(--muted2)">/${esc(g.slug)}</td>
         <td>${g.customer_count}</td><td style="color:var(--muted)">${esc(g.description || '')}</td>
         <td style="white-space:nowrap"><button class="link-btn" data-gedit="${g.id}">Edit</button> · <button class="link-btn" data-gdel="${g.id}" style="color:var(--red)">Delete</button></td></tr>`).join('') || '<tr><td colspan="6" class="empty">No groups yet.</td></tr>'}
@@ -1183,17 +1341,19 @@ const AdminView = {
           <label class="fld"><span>Name</span><input id="g-name" value="${esc(g?.name || '')}"></label>
           <label class="fld"><span>Slug (auto if blank)</span><input id="g-slug" value="${esc(g?.slug || '')}"></label>
         </div>
-        <div class="form-row3">
-          <label class="fld"><span>Color</span><input id="g-color" type="color" value="${esc(g?.color || '#8B5CF6')}" style="height:42px;padding:4px"></label>
+        <div class="form-row">
+          <label class="fld"><span>Color (hex)</span>${colorFieldHtml('g-color', g?.color || '#8B5CF6')}</label>
+          <span></span>
         </div>
         <label class="fld"><span>Description</span><input id="g-desc" value="${esc(g?.description || '')}"></label>
         <div style="display:flex;gap:8px"><button class="btn small" id="g-save">Save</button><button class="btn ghost small" id="g-cancel">Cancel</button></div></div>`;
       document.getElementById('g-cancel').onclick = () => this.groupsManager(main);
+      wireColorField('g-color');
       document.getElementById('g-save').onclick = async () => {
         const payload = {
           name: document.getElementById('g-name').value,
           slug: document.getElementById('g-slug').value,
-          color: document.getElementById('g-color').value,
+          color: colorFieldValue('g-color'),
           description: document.getElementById('g-desc').value,
         };
         try {
@@ -1222,10 +1382,14 @@ const AdminView = {
 
   async branding(main) {
     const s = await api('/api/admin/settings');
-    const colorRow = (id, label, val) => `
+    const colorRow = (id, label, val) => {
+      // stored values render as hex even when an old rgb() string is saved
+      const hex = val ? normalizeColorJs(val) : '';
+      return `
       <label class="fld"><span>${label}</span>
-        <span style="display:flex;gap:8px;align-items:center"><input type="color" id="${id}" value="${esc(val || '#000000')}" style="height:42px;padding:4px;flex:0 0 60px"><input type="text" id="${id}-txt" value="${esc(val || '')}" style="flex:1"></span>
+        <span style="display:flex;gap:8px;align-items:center"><input type="color" id="${id}" value="${esc(hex || '#000000')}" style="height:42px;padding:4px;flex:0 0 60px"><input type="text" id="${id}-txt" value="${esc(hex)}" placeholder="#rrggbb" spellcheck="false" style="flex:1;font-family:monospace"></span>
       </label>`;
+    };
     main.innerHTML = `<h2 style="margin-top:0">🎨 Site & Branding</h2>
       <div class="two-col">
         <div>
@@ -1361,12 +1525,13 @@ const AdminView = {
     document.getElementById('b-overlay').addEventListener('input', (e) => {
       document.getElementById('b-overlay-val').textContent = e.target.value;
     });
-    // sync color text + picker pairs
-    [['b-primary'], ['b-accent'], ['b-dbg'], ['b-dsurf'], ['b-dtext'], ['b-lbg'], ['b-lsurf'], ['b-ltext']].forEach(([id]) => {
+    // sync color text + picker pairs (hex everywhere; rgb() input is
+    // normalized to hex on blur by wireColorField)
+    ['b-primary', 'b-accent', 'b-dbg', 'b-dsurf', 'b-dtext', 'b-lbg', 'b-lsurf', 'b-ltext'].forEach((id) => {
+      wireColorField(id);
       const picker = document.getElementById(id), txt = document.getElementById(id + '-txt');
-      if (!picker || !txt) return;
-      picker.addEventListener('input', () => { txt.value = picker.value; paint(); });
-      txt.addEventListener('input', () => { if (/^#[0-9a-fA-F]{6}$/.test(txt.value)) picker.value = txt.value; paint(); });
+      if (picker) picker.addEventListener('input', paint);
+      if (txt) txt.addEventListener('input', paint);
     });
     paint();
 
@@ -1376,9 +1541,9 @@ const AdminView = {
         site_title: v('b-title'), site_tagline: v('b-tagline'), logo_text: v('b-logo'),
         logo_url: v('b-logourl'), logo_height: String(Math.max(32, Math.min(72, parseInt(v('b-logoheight-num'), 10) || 48))),
         favicon_url: v('b-fav'), default_theme: v('b-theme'),
-        primary_color: v('b-primary-txt'), accent_color: v('b-accent-txt'),
-        dark_bg: v('b-dbg-txt'), dark_surface: v('b-dsurf-txt'), dark_text: v('b-dtext-txt'),
-        light_bg: v('b-lbg-txt'), light_surface: v('b-lsurf-txt'), light_text: v('b-ltext-txt'),
+        primary_color: normalizeColorJs(v('b-primary-txt')), accent_color: normalizeColorJs(v('b-accent-txt')),
+        dark_bg: normalizeColorJs(v('b-dbg-txt')), dark_surface: normalizeColorJs(v('b-dsurf-txt')), dark_text: normalizeColorJs(v('b-dtext-txt')),
+        light_bg: normalizeColorJs(v('b-lbg-txt')), light_surface: normalizeColorJs(v('b-lsurf-txt')), light_text: normalizeColorJs(v('b-ltext-txt')),
         hero_title: v('b-hero'), hero_description: v('b-herod'),
         hero_image_url: v('b-heroimg'), hero_image_fit: v('b-herofit'), hero_image_position: v('b-heropos'),
         hero_overlay: v('b-overlay'), hero_show_cards: document.getElementById('b-herocards').checked ? '1' : '0',
@@ -1406,50 +1571,83 @@ const AdminView = {
       api('/api/admin/cloud/backups'),
     ]);
     const origin = location.origin;
-    const guide = (provider) => {
-      const isG = provider === 'google';
-      const name = isG ? 'Google Drive' : 'OneDrive';
-      const cb = `${origin}/api/admin/cloud/callback/${provider}`;
-      const steps = isG ? [
-        'Go to <a href="https://console.cloud.google.com" target="_blank">console.cloud.google.com</a> and create (or pick) a project.',
-        'Enable the <strong>Google Drive API</strong> (APIs & Services → Library).',
-        'APIs & Services → Credentials → <strong>Create Credentials → OAuth client ID</strong> → type <strong>Web application</strong>.',
-        'Under <strong>Authorized redirect URIs</strong> add:<br><code>' + esc(cb) + '</code>',
-        'Copy the <strong>Client ID</strong> and <strong>Client secret</strong> into the fields above and save.',
-        'Click <strong>Connect</strong> and approve access in the Google window.',
-      ] : [
-        'Go to <a href="https://portal.azure.com" target="_blank">portal.azure.com</a> → Microsoft Entra ID → App registrations → <strong>New registration</strong>.',
-        'Name it “XC Wiki Backup”. Supported account types: <strong>Accounts in any organizational directory and personal Microsoft accounts</strong>.',
-        'Under <strong>Redirect URI</strong> choose <strong>Web</strong> and enter:<br><code>' + esc(cb) + '</code>',
-        'Register → copy the <strong>Application (client) ID</strong>.',
-        'Certificates & secrets → <strong>New client secret</strong> → copy the <strong>Value</strong> (not the ID).',
-        'API permissions → add <strong>Files.ReadWrite</strong> and <strong>offline_access</strong> (delegated).',
-        'Paste the client ID + secret value above, save, then click <strong>Connect</strong>.',
-      ];
-      return `<details class="guide"><summary>📖 Setup guide — create your ${name} OAuth app</summary><ol>${steps.map(s => `<li>${s}</li>`).join('')}</ol></details>`;
-    };
+    /* Guided 3-step connect wizard, identical shape for both providers:
+       1) create the OAuth app in the provider console (one-time),
+       2) paste the keys, 3) one-click Connect. XC Wiki is self-hosted, so
+       step 1 can't be skipped — the copy says so honestly. */
     const card = (provider) => {
       const c = conns[provider];
-      const name = provider === 'google' ? 'Google Drive' : 'OneDrive';
-      const icon = provider === 'google' ? '🔵' : '🟦';
-      return `<div class="panel"><h3>${icon} ${name}</h3>
+      const isG = provider === 'google';
+      const name = isG ? 'Google Drive' : 'OneDrive';
+      const icon = isG ? '🔵' : '🟦';
+      const cb = `${origin}/api/admin/cloud/callback/${provider}`;
+      const consoleUrl = isG ? 'https://console.cloud.google.com/apis/credentials' : 'https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/CreateApplicationBlade';
+      const step1 = isG ? [
+        'Create (or pick) a project, then enable the <strong>Google Drive API</strong> (APIs & Services → Library → “Google Drive API” → Enable).',
+        'APIs & Services → Credentials → <strong>Create Credentials → OAuth client ID</strong> → application type <strong>Web application</strong>.',
+        'Under <strong>Authorized redirect URIs</strong>, paste the redirect URI shown below — it must match exactly.',
+        'Create → Google shows your <strong>Client ID</strong> and <strong>Client secret</strong> — you’ll paste them in Step 2.',
+      ] : [
+        'Name the app “XC Wiki Backup”. For supported account types choose <strong>Accounts in any organizational directory and personal Microsoft accounts</strong> (personal OneDrive accounts need this).',
+        'Under <strong>Redirect URI</strong>, choose platform <strong>Web</strong> and paste the redirect URI shown below — it must match exactly.',
+        'Register → on the Overview page, copy the <strong>Application (client) ID</strong>.',
+        'Certificates & secrets → <strong>New client secret</strong> → copy its <strong>Value</strong> (not the Secret ID). You’ll paste both in Step 2.',
+        'API permissions → Add → Microsoft Graph → Delegated → tick <strong>Files.ReadWrite</strong> and <strong>offline_access</strong>.',
+      ];
+      const status = c.connected
+        ? `<span class="pill published">✅ Connected${c.account_email ? ' — ' + esc(c.account_email) : ''}</span>`
+        : c.configured
+          ? '<span class="pill">Step 3 of 3 — ready to connect</span>'
+          : '<span class="pill archived">Not set up yet</span>';
+      const credFields = `
         <div class="form-row">
-          <label class="fld"><span>Client ID</span><input id="cc-${provider}-id" value="${esc(c.client_id)}" placeholder="…apps.googleusercontent.com"></label>
-          <label class="fld"><span>Client secret ${c.has_client_secret ? '(saved ✓ — leave blank to keep)' : ''}</span><input id="cc-${provider}-secret" type="password" placeholder="${c.has_client_secret ? '••••••••' : 'paste secret'}"></label>
+          <label class="fld"><span>Client ID</span><input id="cc-${provider}-id" value="${esc(c.client_id)}" placeholder="${isG ? '…apps.googleusercontent.com' : 'Application (client) ID — a GUID'}"></label>
+          <label class="fld"><span>Client secret ${c.has_client_secret ? '(saved ✓ — leave blank to keep)' : ''}</span><input id="cc-${provider}-secret" type="password" placeholder="${c.has_client_secret ? '••••••••' : (isG ? 'paste the client secret' : 'paste the secret VALUE (not its ID)')}"></label>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
-          <button class="btn ghost small" data-ccsave="${provider}">Save credentials</button>
-          ${c.configured ? `<button class="btn small" data-ccconnect="${provider}" ${c.connected ? 'disabled' : ''}>${c.connected ? '✅ Connected' : '🔗 Connect'}</button>` : ''}
-          ${c.configured ? `<button class="btn ghost small" data-ccdrop="${provider}" style="color:var(--red)">Disconnect</button>` : ''}
-          ${c.connected ? `<button class="btn small" data-ccbackup="${provider}">☁️ Backup now</button>` : ''}
+          <button class="btn ghost small" data-ccsave="${provider}">${c.configured ? 'Re-save credentials' : 'Save credentials'}</button>
+          ${c.configured ? '<span style="align-self:center;color:var(--muted);font-size:.82rem">✓ Saved — now do Step 3.</span>' : ''}
+        </div>`;
+      return `<div class="panel"><h3>${icon} ${name} ${status}</h3>
+        ${c.connected ? `<p style="color:var(--muted);font-size:.85rem;margin-top:2px">${c.account_name ? esc(c.account_name) + ' · ' : ''}${esc(c.account_email || '')} · connected ${c.connected_at ? timeAgo(c.connected_at) : ''} · backups go to the “${esc(c.folder_name)}” folder</p>` : ''}
+        ${c.last_error ? `<p style="color:var(--red);font-size:.82rem;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.35);border-radius:8px;padding:8px 10px">⚠️ ${esc(c.last_error)}</p>` : ''}
+        ${c.connected ? `
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+          <button class="btn ghost small" data-cctest="${provider}">🔍 Test connection</button>
+          <button class="btn small" data-ccbackup="${provider}">☁️ Run test backup</button>
+          <button class="btn ghost small" data-ccconnect="${provider}">↻ Reconnect</button>
+          <button class="btn ghost small" data-ccdrop="${provider}" style="color:var(--red)">Disconnect</button>
         </div>
-        ${c.last_error ? `<p style="color:var(--red);font-size:.8rem">⚠️ ${esc(c.last_error)}</p>` : ''}
-        ${c.connected_at ? `<p style="color:var(--muted);font-size:.8rem">Connected ${timeAgo(c.connected_at)} · folder “${esc(c.folder_name)}”</p>` : ''}
-        ${guide(provider)}
+        <span id="cc-${provider}-test" style="font-size:.82rem"></span>
+        <details class="guide"><summary>Setup details (redirect URI, re-do credentials)</summary>
+          <label class="fld" style="margin-top:8px"><span>Redirect URI for this install</span>
+            <span style="display:flex;gap:8px"><input readonly value="${esc(cb)}" style="flex:1;font-family:monospace;font-size:.78rem"><button class="btn ghost small" type="button" data-cccopy="${provider}">Copy</button></span></label>
+          ${credFields}
+        </details>` : `
+        <div style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-top:6px">
+          <strong>Step 1 — Create the app <span style="color:var(--muted);font-weight:400">(one-time, about 2 minutes)</span></strong>
+          <p style="color:var(--muted);font-size:.83rem;margin:6px 0">XC Wiki is self-hosted, so there’s no central XC Wiki app to borrow — you create a free OAuth app in your own ${isG ? 'Google' : 'Microsoft'} account, once. After this step, everything else is one click.</p>
+          <a class="btn small" href="${consoleUrl}" target="_blank" rel="noopener">Open the ${isG ? 'Google Cloud Console' : 'Azure app registration'} page →</a>
+          <ol style="font-size:.85rem;margin:10px 0 6px;padding-left:20px">${step1.map(s => `<li style="margin:4px 0">${s}</li>`).join('')}</ol>
+          <label class="fld"><span>Redirect URI — paste this into the app you just created</span>
+            <span style="display:flex;gap:8px"><input readonly value="${esc(cb)}" style="flex:1;font-family:monospace;font-size:.78rem"><button class="btn ghost small" type="button" data-cccopy="${provider}">Copy</button></span></label>
+        </div>
+        <div style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-top:10px">
+          <strong>Step 2 — Paste the keys</strong>
+          ${credFields}
+        </div>
+        <div style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-top:10px;${c.configured ? '' : 'opacity:.55'}">
+          <strong>Step 3 — Connect</strong>
+          <p style="color:var(--muted);font-size:.83rem;margin:6px 0">One click opens the ${name} sign-in popup — approve access and you’re done. We immediately verify the connection by reading your account and creating the backup folder.</p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn small" data-ccconnect="${provider}" ${c.configured ? '' : 'disabled'}>🔗 Connect ${name}</button>
+            ${c.configured ? `<button class="btn ghost small" data-ccdrop="${provider}" style="color:var(--red)">Start over (disconnect)</button>` : '<span style="align-self:center;font-size:.82rem;color:var(--muted)">Save credentials in Step 2 first.</span>'}
+          </div>
+        </div>`}
       </div>`;
     };
     main.innerHTML = `<h2 style="margin-top:0">☁️ Cloud Backup</h2>
-      <p style="color:var(--muted);font-size:.88rem">Encrypted OAuth tokens, timestamped zip backups (database + uploads + manifest with checksums), scheduled backups, per-provider retention, and one-click restore with a safety backup taken first.</p>
+      <p style="color:var(--muted);font-size:.88rem">Backups are timestamped zips (database + uploads + manifest with checksums) stored in your own cloud drive, with scheduling, per-provider retention, and one-click restore (a safety backup is taken first). Setup is a 3-step wizard per provider — the only manual part is a one-time, ~2-minute app creation in the provider’s console, because XC Wiki is self-hosted and has no central OAuth app.</p>
       <div class="two-col">
         <div>${card('google')}</div>
         <div>${card('onedrive')}</div>
@@ -1479,15 +1677,29 @@ const AdminView = {
         </tbody></table></div>
       </div>`;
 
+    main.querySelectorAll('[data-cccopy]').forEach(b => b.onclick = async () => {
+      const p = b.dataset.cccopy;
+      const input = b.closest('.fld').querySelector('input');
+      const uri = input ? input.value : `${origin}/api/admin/cloud/callback/${p}`;
+      try { await navigator.clipboard.writeText(uri); toast('Redirect URI copied — paste it into your app exactly as shown', 'ok'); }
+      catch { if (input) { input.select(); document.execCommand('copy'); toast('Redirect URI copied', 'ok'); } }
+    });
     main.querySelectorAll('[data-ccsave]').forEach(b => b.onclick = async () => {
       const p = b.dataset.ccsave;
+      const idVal = document.getElementById(`cc-${p}-id`).value.trim();
+      const secVal = document.getElementById(`cc-${p}-secret`).value.trim();
+      const existing = conns[p];
+      if (!idVal) { toast('Paste the Client ID first (Step 1 shows where to find it)', 'err'); return; }
+      if (!secVal && !existing.has_client_secret) { toast('Paste the Client secret — for Microsoft, copy the secret VALUE, not its ID', 'err'); return; }
+      if (p === 'google' && !idVal.endsWith('.apps.googleusercontent.com')
+        && !confirm('That doesn’t look like a Google client ID (they end in .apps.googleusercontent.com). Save it anyway?')) return;
+      if (p === 'onedrive' && !/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(idVal)
+        && !confirm('That doesn’t look like an Application (client) ID (it’s a GUID from the app’s Overview page). Save it anyway?')) return;
       try {
         await api('/api/admin/cloud/credentials', { method: 'POST', body: JSON.stringify({
-          provider: p,
-          client_id: document.getElementById(`cc-${p}-id`).value,
-          client_secret: document.getElementById(`cc-${p}-secret`).value,
+          provider: p, client_id: idVal, client_secret: secVal,
         }) });
-        toast('Credentials saved', 'ok'); this.backup(main);
+        toast('✓ Credentials saved — now Step 3: Connect', 'ok'); this.backup(main);
       } catch (e) { toast(e.message, 'err'); }
     });
     main.querySelectorAll('[data-ccconnect]').forEach(b => b.onclick = async () => {
@@ -1495,8 +1707,37 @@ const AdminView = {
       try {
         const d = await api(`/api/admin/cloud/auth-url/${p}`);
         window.open(d.url, '_blank', 'width=600,height=700');
-        toast('Approve access in the popup, then refresh this page', 'ok');
+        toast('Approve access in the popup — this page updates itself when you’re connected', 'ok');
+        /* poll until the callback lands (or ~90s), then re-render in place */
+        let tries = 0;
+        const iv = setInterval(async () => {
+          tries++;
+          if (!document.body.contains(b) || tries > 36) { clearInterval(iv); return; }
+          try {
+            const cs = await api('/api/admin/cloud/connections');
+            if (cs[p] && cs[p].connected) {
+              clearInterval(iv);
+              toast(`✅ ${p === 'google' ? 'Google Drive' : 'OneDrive'} connected${cs[p].account_email ? ' — ' + cs[p].account_email : ''}`, 'ok');
+              this.backup(main);
+            }
+          } catch {}
+        }, 2500);
       } catch (e) { toast(e.message, 'err'); }
+    });
+    main.querySelectorAll('[data-cctest]').forEach(b => b.onclick = async () => {
+      const p = b.dataset.cctest;
+      const out = document.getElementById(`cc-${p}-test`);
+      b.disabled = true;
+      if (out) out.textContent = 'Testing — reading account, checking the backup folder…';
+      try {
+        const r = await api('/api/admin/cloud/test/' + p, { method: 'POST' });
+        if (out) out.innerHTML = `✅ Connection works — ${esc(r.account_email || r.account_name || 'account verified')} · folder “${esc(r.folder_name)}” · ${r.backups_found} backup(s) found`;
+        toast('Connection test passed', 'ok');
+      } catch (e) {
+        if (out) out.innerHTML = `<span style="color:var(--red)">❌ ${esc(e.message)}</span>`;
+        toast('Test failed: ' + e.message, 'err');
+      }
+      b.disabled = false;
     });
     main.querySelectorAll('[data-ccdrop]').forEach(b => b.onclick = async () => {
       if (!confirm('Disconnect this provider? Stored tokens are deleted.')) return;
@@ -1606,7 +1847,7 @@ const AdminView = {
         <select id="va-mode" style="max-width:260px">
           <option value="anon">🌍 Anonymous visitor</option>
           <option value="staff">🛠 Staff</option>
-          ${customers.map(c => `<option value="customer:${c.id}">🙋 ${esc(c.name)} (${esc(c.group_name || 'no group')})</option>`).join('')}
+          ${customers.map(c => `<option value="customer:${c.id}">🙋 ${esc(c.name)} (${esc((c.groups && c.groups.length) ? c.groups.map(g => g.name).join(', ') : (c.group_name || 'no group'))})</option>`).join('')}
         </select>
         <button class="btn small" id="va-go">Preview</button>
       </div>
@@ -1617,7 +1858,7 @@ const AdminView = {
       out.innerHTML = '<div class="empty">Loading…</div>';
       try {
         const d = await api('/api/admin/visibility-preview?viewer=' + encodeURIComponent(mode));
-        const list = (items) => items.map(a => `<div class="art-row"><a class="t" style="font-size:.86rem" href="#/article/${esc(a.slug)}">${esc(a.title)}</a></div>`).join('') || '<div class="empty">Nothing visible.</div>';
+        const list = (items) => items.map(a => `<div class="art-row"><a class="t" style="font-size:.86rem" href="/article/${esc(a.slug)}">${esc(a.title)}</a></div>`).join('') || '<div class="empty">Nothing visible.</div>';
         out.innerHTML = `
           <div class="panel"><h3>Viewing as: ${esc(mode)}</h3>
             <div class="two-col">
@@ -1713,6 +1954,10 @@ const AdminView = {
             <span class="check-row" style="margin:6px 0"><input type="checkbox" id="bs-update"> <label for="bs-update">Update articles that were already imported</label></span>
             <small style="color:var(--muted)">Off = previously imported pages are skipped (nothing duplicates either way; imported media is always reused).</small>
           </label>
+          <label class="fld"><span>Users</span>
+            <span class="check-row" style="margin:6px 0"><input type="checkbox" id="bs-users" checked> <label for="bs-users">Also import users</label></span>
+            <small style="color:var(--muted)">BookStack users become customers with no password set (pending). Afterwards, use <strong>Customers → 📩 Welcome</strong> (or “Send welcome to pending”) so they can set a password and sign in.</small>
+          </label>
         </div>
         <div style="display:flex;gap:8px;margin-top:8px">
           <button class="btn" id="bs-run">⬇ Start import</button>
@@ -1759,7 +2004,7 @@ const AdminView = {
         el.innerHTML = runs.map(r => {
           const x = r.summary || {};
           const when = esc(String(r.started_at || '').replace('T', ' ').slice(0, 19));
-          const counts = `${x.articles_created ?? 0} created · ${x.articles_updated ?? 0} updated · ${x.articles_skipped ?? 0} skipped · ${x.media_imported ?? 0} media imported · ${x.media_failed ?? 0} media failed · ${(x.failures || []).length} failure(s)`;
+          const counts = `${x.articles_created ?? 0} created · ${x.articles_updated ?? 0} updated · ${x.articles_skipped ?? 0} skipped · ${x.media_imported ?? 0} media imported · ${x.media_failed ?? 0} media failed${x.users_imported !== undefined ? ` · Users: ${x.users_imported} imported, ${x.users_skipped ?? 0} skipped` : ''} · ${(x.failures || []).length} failure(s)`;
           const logHtml = (r.log || []).map(logLineHtml).join('');
           return `<details style="border:1px solid var(--border);border-radius:10px;padding:8px 12px;margin-bottom:8px">
             <summary style="cursor:pointer;font-size:.88rem">${r.status === 'done' ? '✅' : '❌'} <strong>${when}</strong> · ${esc(r.base_url || '')} — ${esc(counts)}${r.error ? ' — ❌ ' + esc(r.error) : ''}</summary>
@@ -1824,7 +2069,8 @@ const AdminView = {
         const payload = { ...creds(),
           status: document.getElementById('bs-status').value,
           visibility: document.getElementById('bs-vis').value,
-          update_existing: document.getElementById('bs-update').checked };
+          update_existing: document.getElementById('bs-update').checked,
+          import_users: document.getElementById('bs-users').checked };
         const d = await api('/api/admin/bookstack/import', { method: 'POST', body: JSON.stringify(payload) });
         const jobId = d.job.id;
         toast('BookStack import started', 'ok');
@@ -1849,11 +2095,13 @@ const AdminView = {
               ${cell(x.articles_skipped, 'Articles skipped')}${cell(x.media_imported, 'Media imported')}
               ${cell(x.media_reused, 'Media reused')}${cell(x.links_rewritten, 'Links rewritten')}
               ${cell(x.covers_set, 'Book covers set')}
+              ${cell(x.users_imported, 'Users imported')}${cell(x.users_skipped, 'Users skipped')}
             </div>
+            ${x.users_imported ? `<p style="font-size:.85rem">👋 ${x.users_imported} user(s) were imported as pending customers — head to <a href="/admin/customers">Customers</a> and use <strong>📩 Send welcome to pending</strong> so they can set a password.</p>` : ''}
             ${x.media_failed ? `<p style="color:var(--amber);font-size:.85rem">⚠️ ${x.media_failed} media file(s) failed to download.</p>` : ''}
             ${x.failures && x.failures.length ? `<h4>Failures (${x.failures.length})</h4><div style="max-height:220px;overflow:auto"><table class="tbl"><thead><tr><th>Type</th><th>Item</th><th>Error</th></tr></thead>
               <tbody>${x.failures.map(f => `<tr><td>${esc(f.type)}</td><td>${esc(f.name)}</td><td>${esc(f.error)}</td></tr>`).join('')}</tbody></table></div>` : ''}
-            <p style="font-size:.85rem"><a href="#/admin/articles">Review imported articles →</a> · <a href="#/admin/media">Open Media Library →</a></p>`;
+            <p style="font-size:.85rem"><a href="/admin/articles">Review imported articles →</a> · <a href="/admin/media">Open Media Library →</a></p>`;
           loadPast();
         };
         poll();
@@ -1867,7 +2115,7 @@ const AdminView = {
     main.innerHTML = `<h2 style="margin-top:0">Settings</h2>
       <div class="panel"><h3>🎨 Branding</h3>
         <p style="color:var(--muted);font-size:.85rem">Site title, logo, colors, hero, footer and custom CSS now live in the dedicated panel.</p>
-        <a class="btn small" href="#/admin/branding">Open Site & Branding →</a>
+        <a class="btn small" href="/admin/branding">Open Site & Branding →</a>
       </div>
       <div class="panel" style="margin-top:14px"><h3>Import / Export</h3>
         <p style="color:var(--muted);font-size:.85rem">Export everything as JSON (articles are stored as sanitized HTML in v2). Import brings articles in as drafts.</p>
@@ -1894,6 +2142,8 @@ const AdminView = {
           <label class="fld"><span>From email</span><input id="em-fromemail" type="email" placeholder="wiki@example.com"></label>
         </div>
         <label class="check-row"><input type="checkbox" id="em-alerts"> Email staff when a reader leaves article feedback</label>
+        <label class="check-row"><input type="checkbox" id="em-notify"> 🔔 Notify me when a customer accepts an invite (sets their password from an invite link)</label>
+        <label class="fld"><span>Discord webhook URL <small style="color:var(--muted)">(optional — invite-acceptance notifications are also posted to this channel)</small></span><input id="em-discord" placeholder="https://discord.com/api/webhooks/…" autocomplete="off"></label>
         <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
           <button class="btn small" id="em-save">Save email settings</button>
           <button class="btn ghost small" id="em-test">Send test email to me</button>
@@ -1923,6 +2173,8 @@ const AdminView = {
         emv('em-fromname').value = s.smtp_from_name || '';
         emv('em-fromemail').value = s.smtp_from_email || '';
         emv('em-alerts').checked = !!s.email_alerts_feedback;
+        emv('em-notify').checked = !!s.notify_invite_accepted;
+        emv('em-discord').value = s.discord_webhook_url || '';
         emv('em-pass').placeholder = s.smtp_pass_set ? `${s.smtp_pass_masked} (blank = keep)` : 'Not set';
         emv('em-state').innerHTML = s.configured
           ? '<span class="pill published">Email is configured</span>'
@@ -1939,6 +2191,8 @@ const AdminView = {
         smtp_from_name: emv('em-fromname').value.trim(),
         smtp_from_email: emv('em-fromemail').value.trim(),
         email_alerts_feedback: emv('em-alerts').checked,
+        notify_invite_accepted: emv('em-notify').checked,
+        discord_webhook_url: emv('em-discord').value.trim(),
       };
       const pw = emv('em-pass').value;
       if (pw) payload.smtp_pass = pw;

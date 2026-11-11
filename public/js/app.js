@@ -35,6 +35,35 @@ function anonKey() {
   return App.anonKey;
 }
 
+/* A customer can belong to several groups — join their names for display. */
+function groupNamesText(user) {
+  if (!user) return '';
+  if (Array.isArray(user.groups) && user.groups.length) return user.groups.map(g => g.name).join(', ');
+  return user.group_name || '';
+}
+
+/* ---------------- clean-URL routing ----------------
+   Routes live in location.pathname (e.g. /article/<slug>, /admin/...) —
+   no more hash routing. navigate() pushes history state and re-renders;
+   browser back/forward arrives via popstate. Backward compatibility:
+   old bookmarks and already-sent email links carry the route in the hash
+   (#/article/<slug>, #/set-password?token=…) — shimLegacyHash() rewrites
+   such a URL to the clean path once, before the first render. */
+function navigate(path, opts = {}) {
+  const url = path && path.startsWith('/') ? path : '/' + (path || '');
+  if (opts.replace) history.replaceState(null, '', url);
+  else if (url !== location.pathname + location.search) history.pushState(null, '', url);
+  route();
+}
+function shimLegacyHash() {
+  const h = location.hash || '';
+  if (h.startsWith('#/')) {
+    history.replaceState(null, '', h.slice(1));
+    return true;
+  }
+  return false;
+}
+
 async function api(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
   if (App.token) headers['Authorization'] = 'Bearer ' + App.token;
@@ -43,7 +72,7 @@ async function api(path, opts = {}) {
     App.token = ''; store.remove('xcwiki_token'); App.user = null;
     renderUserArea();
     /* Login wall: an expired session goes back to the sign-in screen. */
-    if (!/^#\/(login|customer-login|setup|set-password)/.test(location.hash)) location.hash = '#/customer-login';
+    if (!/^\/(login|customer-login|setup|set-password)(\/|$)/.test(location.pathname)) navigate('/customer-login');
   }
   let data = null;
   try { data = await res.json(); } catch {}
@@ -158,16 +187,16 @@ function renderUserArea() {
       openModal(`
         <div style="padding:20px">
           <h3 style="margin-top:0">${esc(App.user.name)}</h3>
-          <p style="color:var(--muted);font-size:.85rem">${esc(App.user.email)}${App.user.group_name ? ' · ' + esc(App.user.group_name) : ''}</p>
+          <p style="color:var(--muted);font-size:.85rem">${esc(App.user.email)}${groupNamesText(App.user) ? ' · ' + esc(groupNamesText(App.user)) : ''}</p>
           <div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">
-            <a class="btn" href="#/account">My Account</a>
+            <a class="btn" href="/account">My Account</a>
             <button class="btn ghost" id="m-logout">Sign out</button>
           </div>
         </div>`);
       document.getElementById('m-logout').onclick = async () => {
         await api('/api/customer/logout', { method: 'POST' }).catch(() => {});
         App.token = ''; store.remove('xcwiki_token'); App.user = null;
-        closeModal(); renderUserArea(); location.hash = '#/';
+        closeModal(); renderUserArea(); navigate('/');
       };
     };
     banner.classList.add('hidden');
@@ -179,7 +208,7 @@ function renderUserArea() {
           <h3 style="margin-top:0">${esc(App.user.display_name)}</h3>
           <p style="color:var(--muted);font-size:.85rem">${esc(App.user.email)} · ${esc(App.user.role)}</p>
           <div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">
-            <a class="btn" href="#/admin">Staff dashboard</a>
+            <a class="btn" href="/admin">Staff dashboard</a>
             <button class="btn ghost" id="m-preview">Preview as customer</button>
             <button class="btn ghost" id="m-logout">Sign out</button>
           </div>
@@ -188,7 +217,7 @@ function renderUserArea() {
       document.getElementById('m-logout').onclick = async () => {
         await api('/api/auth/logout', { method: 'POST' }).catch(() => {});
         App.token = ''; store.remove('xcwiki_token'); App.user = null;
-        closeModal(); renderUserArea(); location.hash = '#/';
+        closeModal(); renderUserArea(); navigate('/');
       };
     };
     banner.classList.add('hidden');
@@ -196,7 +225,7 @@ function renderUserArea() {
     el.innerHTML = `<span class="chip">👁️ Preview Customer</span>`;
     banner.classList.remove('hidden');
   } else {
-    el.innerHTML = `<a class="btn ghost small" href="#/customer-login">Customer login</a>`;
+    el.innerHTML = `<a class="btn ghost small" href="/customer-login">Customer login</a>`;
     banner.classList.add('hidden');
   }
   syncChrome();
@@ -235,7 +264,7 @@ function openSearch(prefill = '') {
   input.onkeydown = (e) => {
     if (e.key === 'Enter') {
       const first = document.querySelector('#search-results .sr-item');
-      if (first) { closeSearch(); location.hash = first.getAttribute('href'); }
+      if (first) { closeSearch(); navigate(first.getAttribute('href')); }
     }
     if (e.key === 'Escape') closeSearch();
   };
@@ -258,7 +287,7 @@ async function runSearch(q) {
   if (!q) {
     const pop = (App.settings && App.settings.popular_searches) || [];
     box.innerHTML = `<div class="sr-cat">Popular searches</div>` + pop.map(p =>
-      `<a class="sr-item" href="#/search/${encodeURIComponent(p)}"><div class="t">${esc(p)}</div></a>`).join('');
+      `<a class="sr-item" href="/search/${encodeURIComponent(p)}"><div class="t">${esc(p)}</div></a>`).join('');
     box.querySelectorAll('.sr-item').forEach(a => a.addEventListener('click', closeSearch));
     return;
   }
@@ -266,14 +295,14 @@ async function runSearch(q) {
   try {
     const d = await api('/api/search?q=' + encodeURIComponent(q));
     if (!d.results.length) {
-      box.innerHTML = `<div class="empty">No results for “${esc(q)}”.<br><a href="#/search/${encodeURIComponent(q)}">View search page</a></div>`;
+      box.innerHTML = `<div class="empty">No results for “${esc(q)}”.<br><a href="/search/${encodeURIComponent(q)}">View search page</a></div>`;
       return;
     }
     box.innerHTML = `<div class="sr-cat">${d.results.length} result${d.results.length > 1 ? 's' : ''}</div>` + d.results.slice(0, 10).map(r => `
-      <a class="sr-item" href="#/article/${esc(r.slug)}">
+      <a class="sr-item" href="/article/${esc(r.slug)}">
         <div class="t">${highlight(r.title, q)}</div>
         <div class="s">${r.category ? esc(r.category.name) + ' · ' : ''}${highlight(r.excerpt || '', q)}</div>
-      </a>`).join('') + `<a class="sr-item" href="#/search/${encodeURIComponent(q)}"><div class="t" style="color:var(--accent2)">See all results →</div></a>`;
+      </a>`).join('') + `<a class="sr-item" href="/search/${encodeURIComponent(q)}"><div class="t" style="color:var(--accent2)">See all results →</div></a>`;
     box.querySelectorAll('.sr-item').forEach(a => a.addEventListener('click', closeSearch));
   } catch (e) {
     box.innerHTML = `<div class="empty">Search failed.</div>`;
@@ -295,9 +324,9 @@ function closeModal() { document.getElementById('modal-root').innerHTML = ''; }
 
 function artRow(a) {
   const lock = a.restricted ? ' <span class="lock" title="Restricted article">🔒</span>' : '';
-  const edit = canStaffEdit() ? `<a class="staff-edit staff-edit-inline" href="#/admin/article/${a.id}" title="Edit this article">✏️ Edit</a>` : '';
+  const edit = canStaffEdit() ? `<a class="staff-edit staff-edit-inline" href="/admin/article/${a.id}" title="Edit this article">✏️ Edit</a>` : '';
   return `<div class="art-row">
-    <a class="t" href="#/article/${esc(a.slug)}">${esc(a.title)}${lock}</a>${edit}
+    <a class="t" href="/article/${esc(a.slug)}">${esc(a.title)}${lock}</a>${edit}
     <div class="meta">${a.category ? esc(a.category.name) + ' · ' : ''}${a.service ? esc(a.service.name) + ' · ' : ''}${a.reading_time_min} min${a.updated_at ? ' · ' + timeAgo(a.updated_at) : ''}</div>
   </div>`;
 }
@@ -326,7 +355,7 @@ function wireStaffEdits(root) {
     const go = (e) => {
       e.preventDefault(); e.stopPropagation();
       try { sessionStorage.setItem('xcwiki_edit_category', el.dataset.editCat); } catch { /* storage unavailable */ }
-      location.hash = '#/admin/categories';
+      navigate('/admin/categories');
     };
     el.addEventListener('click', go);
     el.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') go(e); });
@@ -363,7 +392,7 @@ async function viewHome() {
 
     <div class="cat-grid">
       ${d.categories.map(c => `
-        <a class="cat-card" href="#/category/${esc(c.slug)}">
+        <a class="cat-card" href="/category/${esc(c.slug)}">
           ${catCardVisual(c)}
           <strong>${esc(c.name)}</strong><small>${esc(c.description)}</small>
           ${canStaffEdit() ? catEditPill(c) : '<span class="arr">→</span>'}
@@ -372,10 +401,10 @@ async function viewHome() {
 
     <div class="section">
       <div class="section-head"><div><h2>Your Services</h2><p class="sub">Guides specific to your active services.</p></div>
-      <a href="#/services" style="font-size:.8rem">View All My Services →</a></div>
+      <a href="/services" style="font-size:.8rem">View All My Services →</a></div>
       <div class="svc-grid">
         ${d.services.slice(0, 2).map(svc => `
-          <a class="svc-card" href="#/service/${esc(svc.slug)}">
+          <a class="svc-card" href="/service/${esc(svc.slug)}">
             <span class="si" style="background:${esc(svc.color)}22">${esc(svc.icon)}</span>
             <span><strong>${esc(svc.name)}</strong><small>${esc(svc.description)}</small></span>
             <span class="arr">→</span>
@@ -390,28 +419,18 @@ async function viewHome() {
       <div class="art-list">${d.featured.map(artRow).join('') || '<div class="empty">No recommendations yet.</div>'}</div>
     </div>
 
-    <div class="section">
-      <div class="section-head"><div><h2>Browse by Service</h2><p class="sub">Select a service to view all available guides.</p></div></div>
-      <div class="browse-grid">
-        ${d.services.map(svc => `
-          <a class="browse-item" href="#/service/${esc(svc.slug)}">
-            <span class="bi" style="background:${esc(svc.color)}22">${esc(svc.icon)}</span>${esc(svc.name)}
-          </a>`).join('')}
-      </div>
-    </div>
-
     <div class="section two-col">
-      <div class="panel"><h3>Recently Updated <a href="#/recent">View All →</a></h3><div class="art-list">${d.recent.map(artRow).join('')}</div></div>
-      <div class="panel"><h3>Popular Guides <a href="#/popular">View All →</a></h3><div class="art-list">${d.popular.map(artRow).join('')}</div></div>
+      <div class="panel"><h3>Recently Updated <a href="/recent">View All →</a></h3><div class="art-list">${d.recent.map(artRow).join('')}</div></div>
+      <div class="panel"><h3>Popular Guides <a href="/popular">View All →</a></h3><div class="art-list">${d.popular.map(artRow).join('')}</div></div>
     </div>`;
 
   const go = () => {
     const q = document.getElementById('hero-q').value.trim();
-    if (q) location.hash = '#/search/' + encodeURIComponent(q);
+    if (q) navigate('/search/' + encodeURIComponent(q));
   };
   document.getElementById('hero-go').onclick = go;
   document.getElementById('hero-q').onkeydown = (e) => { if (e.key === 'Enter') go(); };
-  app.querySelectorAll('.chip[data-q]').forEach(ch => ch.onclick = () => { location.hash = '#/search/' + encodeURIComponent(ch.dataset.q); });
+  app.querySelectorAll('.chip[data-q]').forEach(ch => ch.onclick = () => { navigate('/search/' + encodeURIComponent(ch.dataset.q)); });
   wireStaffEdits(app);
 }
 
@@ -435,7 +454,7 @@ async function continueReadingCard() {
         <div class="cr-title">${esc(art.title)}</div>
         <div class="cr-step">${pct}% complete</div>
         <div class="progress"><div style="width:${pct}%"></div></div>
-        <div style="margin-top:10px"><a class="link-btn" href="#/article/${esc(art.slug)}">Continue →</a></div>
+        <div style="margin-top:10px"><a class="link-btn" href="/article/${esc(art.slug)}">Continue →</a></div>
       </div></div>`;
   } catch { return ''; }
 }
@@ -444,16 +463,16 @@ async function viewArticle(slug) {
   const app = document.getElementById('app');
   app.innerHTML = '<div class="empty">Loading…</div>';
   const d = await api('/api/articles/' + encodeURIComponent(slug));
-  if (d.redirect) { location.hash = '#/article/' + d.redirect; return; }
+  if (d.redirect) { navigate('/article/' + d.redirect); return; }
 
   document.title = d.title + ' — XC Wiki';
   app.innerHTML = `
     <div class="reading-bar" id="reading-bar"></div>
-    <div class="crumbs"><a href="#/">Home</a> › ${d.category ? `<a href="#/category/${esc(d.category.slug)}">${esc(d.category.name)}</a> › ` : ''}${esc(d.title)}</div>
+    <div class="crumbs"><a href="/">Home</a> › ${d.category ? `<a href="/category/${esc(d.category.slug)}">${esc(d.category.name)}</a> › ` : ''}${esc(d.title)}</div>
     <div class="article-layout">
       <article class="article-body">
         <h1>${esc(d.title)}</h1>
-        ${canStaffEdit() ? `<div style="margin:4px 0 10px"><a class="staff-edit staff-edit-head" href="#/admin/article/${d.id}">✏️ Edit this article</a></div>` : ''}
+        ${canStaffEdit() ? `<div style="margin:4px 0 10px"><a class="staff-edit staff-edit-head" href="/admin/article/${d.id}">✏️ Edit this article</a></div>` : ''}
         <div class="article-meta">
           <span>👁 ${d.views} views</span><span>⏱ ${d.reading_time_min} min read</span>
           ${d.category ? `<span>${(d.category.cover_image || d.category.icon_image) ? `<img src="${esc(d.category.cover_image || d.category.icon_image)}" alt="" style="width:16px;height:16px;object-fit:cover;border-radius:4px;vertical-align:-3px">` : esc(d.category.icon)} ${esc(d.category.name)}</span>` : ''}
@@ -468,7 +487,7 @@ async function viewArticle(slug) {
           if (f.kind === 'audio') return `<div class="attach-item"><div class="attach-name">🎵 ${esc(f.title || f.original_name)}</div><audio controls src="${f.url}" style="width:100%"></audio></div>`;
           return `<div class="attach-item"><a href="${f.url}" download>📎 ${esc(f.title || f.original_name)}</a> <span class="attach-name">${(f.size_bytes / 1024).toFixed(0)} KB</span></div>`;
         }).join('')}</div>` : ''}
-        <div class="tag-row">${(d.tags || []).map(t => `<a class="tag" href="#/tag/${esc(t.slug)}">${esc(t.name)}</a>`).join('')}</div>
+        <div class="tag-row">${(d.tags || []).map(t => `<a class="tag" href="/tag/${esc(t.slug)}">${esc(t.name)}</a>`).join('')}</div>
         <div class="feedback-box" id="feedback-box">
           <strong>Was this helpful?</strong>
           <div class="fb-btns">
@@ -477,8 +496,8 @@ async function viewArticle(slug) {
           </div>
         </div>
         <div class="prevnext">
-          ${d.prev ? `<a href="#/article/${esc(d.prev.slug)}"><small>← Previous</small>${esc(d.prev.title)}</a>` : '<span></span>'}
-          ${d.next ? `<a href="#/article/${esc(d.next.slug)}" style="text-align:right"><small>Next →</small>${esc(d.next.title)}</a>` : '<span></span>'}
+          ${d.prev ? `<a href="/article/${esc(d.prev.slug)}"><small>← Previous</small>${esc(d.prev.title)}</a>` : '<span></span>'}
+          ${d.next ? `<a href="/article/${esc(d.next.slug)}" style="text-align:right"><small>Next →</small>${esc(d.next.title)}</a>` : '<span></span>'}
         </div>
       </article>
       <aside class="toc" id="toc">
@@ -531,11 +550,11 @@ async function viewTaxonomyList(kind) {
   const app = document.getElementById('app');
   const titles = { categories: 'All Categories', services: 'All Services', tags: 'All Tags' };
   const d = await api('/api/' + kind);
-  app.innerHTML = `<div class="crumbs"><a href="#/">Home</a> › ${titles[kind]}</div>
+  app.innerHTML = `<div class="crumbs"><a href="/">Home</a> › ${titles[kind]}</div>
     <h1 style="margin-top:6px">${titles[kind]}</h1>
     <div class="cat-grid" style="grid-template-columns:repeat(3,1fr)">
     ${d.map(x => `
-      <a class="cat-card" href="#/${kind === 'categories' ? 'category' : kind === 'services' ? 'service' : 'tag'}/${esc(x.slug)}">
+      <a class="cat-card" href="/${kind === 'categories' ? 'category' : kind === 'services' ? 'service' : 'tag'}/${esc(x.slug)}">
         ${kind === 'categories' ? catCardVisual(x) : `<span class="ci" style="background:${esc(x.color || '#3B82F6')}22;color:${esc(x.color || '#3B82F6')}">${esc(x.icon || '🏷️')}</span>`}
         <strong>${esc(x.name)}</strong><small>${esc(x.description || '')}${x.article_count !== undefined ? ` · ${x.article_count} articles` : ''}</small>
         ${kind === 'categories' && canStaffEdit() ? catEditPill(x) : '<span class="arr">→</span>'}
@@ -554,9 +573,9 @@ async function viewTaxonomyDetail(kind, slug) {
     : kind === 'category' && obj.icon_image
       ? `<img src="${esc(obj.icon_image)}" alt="" style="width:30px;height:30px;object-fit:cover;border-radius:8px;vertical-align:-6px">`
       : esc(obj.icon || '');
-  app.innerHTML = `<div class="crumbs"><a href="#/">Home</a> › <a href="#/${single}">${single[0].toUpperCase() + single.slice(1)}</a> › ${esc(obj.name)}</div>
+  app.innerHTML = `<div class="crumbs"><a href="/">Home</a> › <a href="/${single}">${single[0].toUpperCase() + single.slice(1)}</a> › ${esc(obj.name)}</div>
     ${hasCover ? `<img class="cat-banner" src="${esc(obj.cover_image)}" alt="">` : ''}
-    <h1 style="margin-top:6px">${headIcon} ${esc(obj.name)}${kind === 'category' && canStaffEdit() ? `<a class="staff-edit staff-edit-head" href="#/admin/categories" data-edit-cat="${obj.id}" style="margin-left:12px">✏️ Edit this category</a>` : ''}</h1>
+    <h1 style="margin-top:6px">${headIcon} ${esc(obj.name)}${kind === 'category' && canStaffEdit() ? `<a class="staff-edit staff-edit-head" href="/admin/categories" data-edit-cat="${obj.id}" style="margin-left:12px">✏️ Edit this category</a>` : ''}</h1>
     ${obj.description ? `<p style="color:var(--muted)">${esc(obj.description)}</p>` : ''}
     <div class="art-list" style="margin-top:14px">${d.articles.map(artRow).join('') || '<div class="empty">No articles yet.</div>'}</div>`;
   wireStaffEdits(app);
@@ -564,13 +583,13 @@ async function viewTaxonomyDetail(kind, slug) {
 
 async function viewSearchPage(q) {
   const app = document.getElementById('app');
-  app.innerHTML = `<div class="crumbs"><a href="#/">Home</a> › Search</div><h1>Search</h1><div class="empty">Searching…</div>`;
+  app.innerHTML = `<div class="crumbs"><a href="/">Home</a> › Search</div><h1>Search</h1><div class="empty">Searching…</div>`;
   const d = await api('/api/search?q=' + encodeURIComponent(q));
-  app.innerHTML = `<div class="crumbs"><a href="#/">Home</a> › Search</div>
+  app.innerHTML = `<div class="crumbs"><a href="/">Home</a> › Search</div>
     <h1 style="margin-top:6px">Results for “${esc(q)}”</h1>
     <p style="color:var(--muted)">${d.results.length} result${d.results.length === 1 ? '' : 's'}</p>
     <div class="art-list">${d.results.map(r => `
-      <div class="art-row"><a class="t" href="#/article/${esc(r.slug)}">${highlight(r.title, q)}</a>
+      <div class="art-row"><a class="t" href="/article/${esc(r.slug)}">${highlight(r.title, q)}</a>
       <div class="meta">${r.category ? esc(r.category.name) + ' · ' : ''}${highlight(r.excerpt || '', q)}</div></div>`).join('') || '<div class="empty">No results found. Try different keywords.</div>'}</div>`;
 }
 
@@ -579,7 +598,7 @@ async function viewArticleListPage(kind) {
   const d = await api('/api/home');
   const list = kind === 'popular' ? d.popular : d.recent;
   const title = kind === 'popular' ? 'Popular Guides' : 'Recently Updated';
-  app.innerHTML = `<div class="crumbs"><a href="#/">Home</a> › ${title}</div>
+  app.innerHTML = `<div class="crumbs"><a href="/">Home</a> › ${title}</div>
     <h1 style="margin-top:6px">${title}</h1>
     <div class="art-list" style="margin-top:12px">${list.map(artRow).join('')}</div>`;
 }
@@ -589,7 +608,7 @@ async function viewArticleListPage(kind) {
 async function viewSetup() {
   const app = document.getElementById('app');
   const { needed } = await api('/api/setup-needed');
-  if (!needed) { location.hash = '#/login'; return; }
+  if (!needed) { navigate('/login'); return; }
   app.innerHTML = `<div class="auth-wrap"><div class="auth-card">
     <h1>🚀 Welcome to XC Wiki</h1>
     <p class="sub">Create the first administrator account to get started.</p>
@@ -606,7 +625,7 @@ async function viewSetup() {
     try {
       const d = await api('/api/setup', { method: 'POST', body: JSON.stringify(Object.fromEntries(fd)) });
       App.token = d.token; store.set('xcwiki_token', d.token); App.user = d.user;
-      renderUserArea(); toast('Admin account created', 'ok'); location.hash = '#/admin';
+      renderUserArea(); toast('Admin account created', 'ok'); navigate('/admin');
     } catch (err) { document.getElementById('setup-err').textContent = err.message; }
   };
 }
@@ -636,14 +655,14 @@ async function viewLogin() {
       try {
         const d = await api('/api/setup', { method: 'POST', body: JSON.stringify(Object.fromEntries(fd)) });
         App.token = d.token; store.set('xcwiki_token', d.token); App.user = d.user; App.setupNeeded = false;
-        renderUserArea(); toast('Admin account created', 'ok'); location.hash = '#/admin';
+        renderUserArea(); toast('Admin account created', 'ok'); navigate('/admin');
       } catch (err) { document.getElementById('setup-err').textContent = err.message; }
     };
     return;
   }
   app.innerHTML = `<div class="auth-wrap"><div class="auth-card">
     <h1>Staff Login</h1>
-    <p class="sub">Editors and admins sign in here. This is a private wiki — customers use the <a href="#/customer-login">customer sign-in</a> with their own accounts.</p>
+    <p class="sub">Editors and admins sign in here. This is a private wiki — customers use the <a href="/customer-login">customer sign-in</a> with their own accounts.</p>
     <form id="login-form">
       <label class="fld"><span>Email</span><input name="email" type="email" required></label>
       <label class="fld"><span>Password</span><input name="password" type="password" required></label>
@@ -656,14 +675,14 @@ async function viewLogin() {
     try {
       const d = await api('/api/auth/login', { method: 'POST', body: JSON.stringify(Object.fromEntries(fd)) });
       App.token = d.token; store.set('xcwiki_token', d.token); App.user = d.user;
-      renderUserArea(); toast('Signed in', 'ok'); location.hash = '#/admin';
+      renderUserArea(); toast('Signed in', 'ok'); navigate('/admin');
     } catch (err) { document.getElementById('login-err').textContent = err.message; }
   };
 }
 
 function viewCustomerLogin() {
   const app = document.getElementById('app');
-  if (App.user && App.user.kind === 'customer') { location.hash = '#/account'; return; }
+  if (App.user && App.user.kind === 'customer') { navigate('/account'); return; }
   app.innerHTML = `<div class="auth-wrap"><div class="auth-card">
     <h1>Customer Login</h1>
     <p class="sub">This is a private wiki. Sign in with the account your administrator invited you with — check your email for the password-setup link if it's your first time.</p>
@@ -673,7 +692,7 @@ function viewCustomerLogin() {
       <button class="btn" style="width:100%;margin-top:8px">Sign in</button>
       <p id="clogin-err" style="color:var(--red);font-size:.82rem"></p>
     </form>
-    <p class="sub" style="margin-top:14px">Staff? <a href="#/login">Sign in here →</a></p>
+    <p class="sub" style="margin-top:14px">Staff? <a href="/login">Sign in here →</a></p>
     </div></div>`;
   document.getElementById('clogin-form').onsubmit = async (e) => {
     e.preventDefault();
@@ -681,7 +700,7 @@ function viewCustomerLogin() {
     try {
       const d = await api('/api/customer/login', { method: 'POST', body: JSON.stringify(Object.fromEntries(fd)) });
       App.token = d.token; store.set('xcwiki_token', d.token); App.user = d.user;
-      renderUserArea(); toast('Signed in', 'ok'); location.hash = '#/';
+      renderUserArea(); toast('Signed in', 'ok'); navigate('/');
     } catch (err) { document.getElementById('clogin-err').textContent = err.message; }
   };
 }
@@ -697,7 +716,7 @@ async function viewSetPassword(token) {
   try { info = await api('/api/customer/set-password-info?token=' + encodeURIComponent(token)); } catch (e) {
     app.innerHTML = `<div class="auth-wrap"><div class="auth-card"><h1>Set your password</h1>
       <p class="sub">${esc(e.message)}</p>
-      <p class="sub"><a href="#/customer-login">← Back to sign in</a></p></div></div>`;
+      <p class="sub"><a href="/customer-login">← Back to sign in</a></p></div></div>`;
     return;
   }
   app.innerHTML = `<div class="auth-wrap"><div class="auth-card">
@@ -720,23 +739,23 @@ async function viewSetPassword(token) {
     try {
       await api('/api/customer/set-password', { method: 'POST', body: JSON.stringify({ token, password: pw }) });
       toast('Password set — sign in to continue', 'ok');
-      location.hash = '#/customer-login';
+      navigate('/customer-login');
     } catch (err) { document.getElementById('setpw-err').textContent = err.message; }
   };
 }
 
 async function viewAccount() {
   const app = document.getElementById('app');
-  if (!App.user || App.user.kind !== 'customer') { location.hash = '#/customer-login'; return; }
+  if (!App.user || App.user.kind !== 'customer') { navigate('/customer-login'); return; }
   const u = App.user;
-  app.innerHTML = `<div class="crumbs"><a href="#/">Home</a> › My Account</div>
+  app.innerHTML = `<div class="crumbs"><a href="/">Home</a> › My Account</div>
     <h1 style="margin-top:6px">My Account</h1>
     <div class="two-col" style="margin-top:14px">
       <div class="panel"><h3>Profile</h3>
         <p><strong>${esc(u.name)}</strong><br>
         <span style="color:var(--muted);font-size:.85rem">${esc(u.email)}</span><br>
         ${u.company ? `<span style="color:var(--muted);font-size:.85rem">${esc(u.company)}</span><br>` : ''}
-        ${u.group_name ? `<span class="pill published" style="margin-top:6px;display:inline-block">${esc(u.group_name)}</span>` : ''}</p>
+        ${(u.groups && u.groups.length ? u.groups : (u.group_name ? [{ name: u.group_name }] : [])).map(g => `<span class="pill published" style="margin-top:6px;display:inline-block">${esc(g.name)}</span>`).join(' ')}</p>
         <button class="btn ghost small" id="acc-logout">Sign out</button>
       </div>
       <div class="panel"><h3>Change password</h3>
@@ -751,7 +770,7 @@ async function viewAccount() {
   document.getElementById('acc-logout').onclick = async () => {
     await api('/api/customer/logout', { method: 'POST' }).catch(() => {});
     App.token = ''; store.remove('xcwiki_token'); App.user = null;
-    renderUserArea(); location.hash = '#/';
+    renderUserArea(); navigate('/');
   };
   document.getElementById('pw-form').onsubmit = async (e) => {
     e.preventDefault();
@@ -775,15 +794,15 @@ async function route() {
   if (App._cleanup) { App._cleanup(); App._cleanup = null; }
   window.scrollTo(0, 0);
   document.getElementById('search-modal').classList.add('hidden');
-  const hash = location.hash || '#/';
-  const [pathOnly, queryOnly] = hash.replace(/^#\//, '').split('?');
-  const parts = pathOnly.split('/');
-  const query = new URLSearchParams(queryOnly || '');
+  shimLegacyHash(); // in case a legacy #/ link lands while the app is open
+  const parts = location.pathname.replace(/^\//, '').split('/');
+  const query = new URLSearchParams(location.search);
   /* Login wall: this wiki is private. Signed-out visitors only ever reach
-     the sign-in screens (and first-run setup / password-setup links). */
+     the sign-in screens (and first-run setup / password-setup links).
+     Guard redirects replace history so Back never loops into the wall. */
   if (!App.user) {
-    if (App.setupNeeded && parts[0] !== 'login' && parts[0] !== 'setup') { location.hash = '#/login'; return; }
-    if (!App.setupNeeded && !['login', 'customer-login', 'setup', 'set-password'].includes(parts[0])) { location.hash = '#/customer-login'; return; }
+    if (App.setupNeeded && parts[0] !== 'login' && parts[0] !== 'setup') { navigate('/login', { replace: true }); return; }
+    if (!App.setupNeeded && !['login', 'customer-login', 'setup', 'set-password'].includes(parts[0])) { navigate('/customer-login', { replace: true }); return; }
   }
   const app = document.getElementById('app');
   try {
@@ -802,12 +821,12 @@ async function route() {
     else if (parts[0] === 'account') { setActiveNav(''); await viewAccount(); }
     else if (parts[0] === 'admin') {
       setActiveNav('');
-      if (!App.user) { location.hash = '#/login'; return; }
+      if (!App.user) { navigate('/login', { replace: true }); return; }
       await AdminView.route(parts.slice(1));
     }
-    else { app.innerHTML = '<div class="empty"><h2>Page not found</h2><a href="#/">Back home</a></div>'; }
+    else { app.innerHTML = '<div class="empty"><h2>Page not found</h2><a href="/">Back home</a></div>'; }
   } catch (e) {
-    app.innerHTML = `<div class="empty"><h2>Something went wrong</h2><p>${esc(e.message)}</p><a href="#/">Back home</a></div>`;
+    app.innerHTML = `<div class="empty"><h2>Something went wrong</h2><p>${esc(e.message)}</p><a href="/">Back home</a></div>`;
   }
   document.getElementById('mainnav').classList.remove('open');
 }
@@ -842,10 +861,28 @@ async function boot() {
   document.getElementById('nav-toggle').onclick = () => document.getElementById('mainnav').classList.toggle('open');
   document.getElementById('preview-exit').onclick = () => setPreviewMode(false);
 
-  window.addEventListener('hashchange', route);
+  /* SPA navigation for clean URLs: internal path links are routed through
+     pushState instead of full page loads. API links, media files, uploads,
+     downloads, new-tab links and in-page #anchors keep native behavior. */
+  document.addEventListener('click', (e) => {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+    if (!a) return;
+    const href = a.getAttribute('href');
+    if (!href || !href.startsWith('/') || href.startsWith('//')) return;
+    if (href.startsWith('/api/') || href.startsWith('/media/') || href.startsWith('/uploads/')) return;
+    if (a.target && a.target !== '_self') return;
+    if (a.hasAttribute('download')) return;
+    e.preventDefault();
+    navigate(href);
+  });
+  window.addEventListener('popstate', route);
+  /* legacy #/ links embedded in stored article HTML still land correctly */
+  window.addEventListener('hashchange', () => { if (shimLegacyHash()) route(); });
+
   const { needed } = setupNeeded;
   App.setupNeeded = needed;
-  if (needed && !location.hash) location.hash = '#/login';
+  shimLegacyHash(); // old #/ bookmarks + emailed links → clean path, once
   await route();
 }
 

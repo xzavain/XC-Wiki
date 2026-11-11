@@ -12,6 +12,9 @@ const { sanitizeArticleHtml, sanitizeCustomCss } = require('./lib/html');
 const {
   getDb, getSettings, setSettings, ensureSettingsSeed, logActivity,
   readingTimeMin, makeExcerpt, slugify, uniqueSlug,
+  normalizeColor, getCustomerGroupIds, getCustomerGroups, getCustomerServices,
+  setCustomerGroups, setCustomerServices, applyServiceGroups, applyServiceGroupsToHolders,
+  syncLegacyGroupId,
 } = require('./lib/db');
 const { hashPassword, verifyPassword, newToken, expiryFor } = require('./lib/auth');
 const cloud = require('./lib/cloud');
@@ -158,13 +161,18 @@ function resolveViewer(db, token) {
   }
   let cust = null;
   try {
-    cust = db.prepare(`SELECT t.*, c.id AS cid, c.name, c.email, c.company, c.disabled, c.group_id, g.name AS group_name
-      FROM customer_tokens t JOIN customers c ON c.id = t.customer_id
-      LEFT JOIN customer_groups g ON g.id = c.group_id WHERE t.token = ?`).get(token);
+    cust = db.prepare(`SELECT t.*, c.id AS cid, c.name, c.email, c.company, c.disabled
+      FROM customer_tokens t JOIN customers c ON c.id = t.customer_id WHERE t.token = ?`).get(token);
   } catch {}
   if (cust) {
     if (cust.expires_at >= Date.now() && !cust.disabled) {
-      return { type: 'customer', id: cust.cid, name: cust.name, email: cust.email, company: cust.company || '', group_id: cust.group_id, group_name: cust.group_name || '', token };
+      const groups = getCustomerGroups(db, cust.cid);
+      return {
+        type: 'customer', id: cust.cid, name: cust.name, email: cust.email, company: cust.company || '',
+        group_id: groups.length ? groups[0].id : null,
+        group_name: groups.length ? groups[0].name : '',
+        group_ids: groups.map(g => g.id), groups, token,
+      };
     }
     try { db.prepare('DELETE FROM customer_tokens WHERE token = ?').run(token); } catch {}
   }
@@ -234,24 +242,54 @@ function requireSignedIn(req, res, next) {
  * joined as `c` via ARTICLE_JOIN) to what `viewer` may see.
  * - staff: everything (published filter applied separately)
  * - anonymous: visibility='all' and category not staff-only
- * - customer: 'all', plus 'groups' articles linked to their group; never staff-only categories
+ * - customer: 'all', plus 'groups' articles linked to ANY group the customer
+ *   belongs to (multi-group membership); never staff-only categories
  */
+/* Category service/group restriction fragments (categories aliased `c`).
+   A category is restriction-free when it has no rows in the join table;
+   otherwise the customer must match at least one row. Staff bypass. */
+const CAT_SERVICE_OK = `(NOT EXISTS (SELECT 1 FROM category_services cs WHERE cs.category_id = c.id)
+  OR EXISTS (SELECT 1 FROM category_services cs JOIN customer_services mine ON mine.service_id = cs.service_id
+             WHERE cs.category_id = c.id AND mine.customer_id = ?))`;
+const CAT_GROUP_OK = `(NOT EXISTS (SELECT 1 FROM category_groups cg WHERE cg.category_id = c.id)
+  OR EXISTS (SELECT 1 FROM category_groups cg JOIN customer_group_members mine ON mine.group_id = cg.group_id
+             WHERE cg.category_id = c.id AND mine.customer_id = ?))`;
+const CAT_UNRESTRICTED = `(NOT EXISTS (SELECT 1 FROM category_services cs WHERE cs.category_id = c.id)
+  AND NOT EXISTS (SELECT 1 FROM category_groups cg WHERE cg.category_id = c.id))`;
+
 function visibilityClause(viewer) {
-  const catOk = `(a.category_id IS NULL OR c.visibility = 'all')`;
   if (viewer && viewer.type === 'staff') return { clause: '1=1', params: [] };
-  if (viewer && viewer.type === 'customer' && viewer.group_id) {
-    return {
-      clause: `(a.visibility = 'all' OR (a.visibility = 'groups' AND EXISTS (SELECT 1 FROM article_groups ag WHERE ag.article_id = a.id AND ag.group_id = ?))) AND ${catOk}`,
-      params: [viewer.group_id],
-    };
+  if (viewer && viewer.type === 'customer') {
+    /* the article's category must also be one the customer may see:
+       public visibility + service/group restriction checks */
+    const catOk = `(a.category_id IS NULL OR (c.visibility = 'all' AND ${CAT_SERVICE_OK} AND ${CAT_GROUP_OK}))`;
+    const catParams = [viewer.id, viewer.id];
+    const ids = Array.isArray(viewer.group_ids) && viewer.group_ids.length
+      ? viewer.group_ids
+      : (viewer.group_id ? [viewer.group_id] : []);
+    if (ids.length) {
+      return {
+        clause: `(a.visibility = 'all' OR (a.visibility = 'groups' AND EXISTS (SELECT 1 FROM article_groups ag WHERE ag.article_id = a.id AND ag.group_id IN (${ids.map(() => '?').join(',')})))) AND ${catOk}`,
+        params: [...ids, ...catParams],
+      };
+    }
+    return { clause: `(a.visibility = 'all' AND ${catOk})`, params: catParams };
   }
+  const catOk = `(a.category_id IS NULL OR (c.visibility = 'all' AND ${CAT_UNRESTRICTED}))`;
   return { clause: `(a.visibility = 'all' AND ${catOk})`, params: [] };
 }
 
-/** Extra WHERE for category listings: hide staff-only categories from non-staff. */
+/** Extra WHERE for category listings: hide staff-only categories from
+    non-staff, and apply service/group category restrictions. A signed-in
+    customer sees a category when it is public AND (unrestricted OR they
+    hold a listed service) AND (unrestricted OR they are in a listed
+    group). Staff bypass restrictions entirely. */
 function categoryVisibilityWhere(viewer) {
   if (viewer && viewer.type === 'staff') return { clause: '1=1', params: [] };
-  return { clause: `c.visibility = 'all'`, params: [] };
+  if (viewer && viewer.type === 'customer') {
+    return { clause: `c.visibility = 'all' AND ${CAT_SERVICE_OK} AND ${CAT_GROUP_OK}`, params: [viewer.id, viewer.id] };
+  }
+  return { clause: `c.visibility = 'all' AND ${CAT_UNRESTRICTED}`, params: [] };
 }
 
 app.get('/api/setup-needed', (req, res) => {
@@ -308,7 +346,7 @@ app.get('/api/me', attachViewer, (req, res) => {
   if (v.type === 'staff') {
     return res.json({ user: { id: v.id, email: v.email, display_name: v.display_name, role: v.role, kind: 'staff' } });
   }
-  res.json({ user: { id: v.id, email: v.email, name: v.name, company: v.company, group_id: v.group_id, group_name: v.group_name, kind: 'customer' } });
+  res.json({ user: { id: v.id, email: v.email, name: v.name, company: v.company, group_id: v.group_id, group_name: v.group_name, group_ids: v.group_ids || [], groups: v.groups || [], kind: 'customer' } });
 });
 
 /* ---------------- Customer auth ---------------- */
@@ -325,9 +363,9 @@ app.post('/api/customer/login', (req, res) => {
   db.prepare('INSERT INTO customer_tokens (token, customer_id, created_at, expires_at) VALUES (?, ?, ?, ?)')
     .run(token, cust.id, Date.now(), expiryFor(false));
   db.prepare('UPDATE customers SET last_login_at = ? WHERE id = ?').run(new Date().toISOString(), cust.id);
-  const g = cust.group_id ? db.prepare('SELECT name FROM customer_groups WHERE id = ?').get(cust.group_id) : null;
+  const groups = getCustomerGroups(db, cust.id);
   setSessionCookie(req, res, token);
-  res.json({ token, user: { id: cust.id, email: cust.email, name: cust.name, company: cust.company, group_id: cust.group_id, group_name: g?.name || '', kind: 'customer' } });
+  res.json({ token, user: { id: cust.id, email: cust.email, name: cust.name, company: cust.company, group_id: groups.length ? groups[0].id : null, group_name: groups.length ? groups[0].name : '', group_ids: groups.map(g => g.id), groups, kind: 'customer' } });
 });
 
 app.post('/api/customer/logout', requireSignedIn, (req, res) => {
@@ -361,6 +399,14 @@ app.post('/api/customer/set-password', (req, res) => {
   db.prepare('UPDATE password_tokens SET used_at = ? WHERE id = ?').run(Date.now(), row.id);
   /* A fresh password retires every existing session for the account. */
   db.prepare('DELETE FROM customer_tokens WHERE customer_id = ?').run(row.customer_id);
+  /* Accepting an invite notifies the admin (email and/or Discord) —
+     fire-and-forget; a notification failure never fails the setup. */
+  if (row.purpose === 'invite') {
+    try {
+      const cust = db.prepare('SELECT id, name, email FROM customers WHERE id = ?').get(row.customer_id);
+      if (cust) mailer.notifyInviteAccepted(db, cust).catch(() => {});
+    } catch {}
+  }
   res.json({ ok: true });
 });
 
@@ -394,15 +440,32 @@ const PUBLIC_BRANDING_KEYS = [
   'custom_css',
 ];
 
+const COLOR_SETTING_KEYS = [
+  'primary_color', 'accent_color',
+  'dark_bg', 'dark_surface', 'dark_text',
+  'light_bg', 'light_surface', 'light_text',
+];
+
 app.get('/api/settings/public', (req, res) => {
   const s = getSettings(getDb());
   const out = {};
   for (const k of PUBLIC_BRANDING_KEYS) out[k] = s[k] ?? '';
+  /* stored colors always render as hex, even legacy rgb() values */
+  for (const k of COLOR_SETTING_KEYS) if (out[k]) out[k] = normalizeColor(out[k], out[k]);
   try { out.popular_searches = JSON.parse(s.popular_searches || '[]'); }
   catch { out.popular_searches = []; }
   out.custom_css = sanitizeCustomCss(out.custom_css);
   res.json(out);
 });
+
+/** Colors always leave the API as lowercase hex, even when an old rgb()
+    string is what's stored. */
+function withHexColor(row) {
+  if (row && row.color !== undefined && row.color !== null && row.color !== '') {
+    row.color = normalizeColor(row.color);
+  }
+  return row;
+}
 
 function articleCard(row) {
   return {
@@ -429,7 +492,7 @@ app.get('/api/home', requireSignedIn, (req, res) => {
   const vis = visibilityClause(req.viewer);
   const catVis = categoryVisibilityWhere(req.viewer);
   const categories = db.prepare(`SELECT c.*, (SELECT COUNT(*) FROM articles a WHERE a.category_id = c.id AND ${pub} AND ${vis.clause}) AS article_count
-    FROM categories c WHERE ${catVis.clause} ORDER BY c.sort_order, c.name`).all(...vis.params);
+    FROM categories c WHERE ${catVis.clause} ORDER BY c.sort_order, c.name`).all(...vis.params, ...catVis.params);
   const services = db.prepare('SELECT * FROM services ORDER BY sort_order, name').all();
   const featured = db.prepare(`SELECT ${ARTICLE_COLS} FROM articles a ${ARTICLE_JOIN} WHERE ${pub} AND ${vis.clause} AND a.featured = 1 ORDER BY a.pinned DESC, a.updated_at DESC LIMIT 6`).all(...vis.params).map(articleCard);
   const recent = db.prepare(`SELECT ${ARTICLE_COLS} FROM articles a ${ARTICLE_JOIN} WHERE ${pub} AND ${vis.clause} ORDER BY a.updated_at DESC LIMIT 6`).all(...vis.params).map(articleCard);
@@ -572,14 +635,15 @@ app.get('/api/categories', requireSignedIn, (req, res) => {
   const vis = visibilityClause(req.viewer);
   const catVis = categoryVisibilityWhere(req.viewer);
   res.json(db.prepare(`SELECT c.*, (SELECT COUNT(*) FROM articles a WHERE a.category_id = c.id AND a.status = 'published' AND ${vis.clause}) AS article_count
-    FROM categories c WHERE ${catVis.clause} ORDER BY c.sort_order, c.name`).all(...vis.params));
+    FROM categories c WHERE ${catVis.clause} ORDER BY c.sort_order, c.name`).all(...vis.params, ...catVis.params).map(withHexColor));
 });
 
 app.get('/api/categories/:slug', requireSignedIn, (req, res) => {
   const db = getDb();
   const catVis = categoryVisibilityWhere(req.viewer);
-  const cat = db.prepare(`SELECT * FROM categories c WHERE c.slug = ? AND ${catVis.clause}`).get(req.params.slug);
+  const cat = db.prepare(`SELECT * FROM categories c WHERE c.slug = ? AND ${catVis.clause}`).get(req.params.slug, ...catVis.params);
   if (!cat) return res.status(404).json({ error: 'Not found' });
+  withHexColor(cat);
   const vis = visibilityClause(req.viewer);
   const articles = db.prepare(`SELECT ${ARTICLE_COLS} FROM articles a ${ARTICLE_JOIN}
     WHERE a.status = 'published' AND ${vis.clause} AND a.category_id = ? ORDER BY a.pinned DESC, a.updated_at DESC`).all(...vis.params, cat.id).map(articleCard);
@@ -587,13 +651,14 @@ app.get('/api/categories/:slug', requireSignedIn, (req, res) => {
 });
 
 app.get('/api/services', requireSignedIn, (req, res) => {
-  res.json(getDb().prepare('SELECT * FROM services ORDER BY sort_order, name').all());
+  res.json(getDb().prepare('SELECT * FROM services ORDER BY sort_order, name').all().map(withHexColor));
 });
 
 app.get('/api/services/:slug', requireSignedIn, (req, res) => {
   const db = getDb();
   const svc = db.prepare('SELECT * FROM services WHERE slug = ?').get(req.params.slug);
   if (!svc) return res.status(404).json({ error: 'Not found' });
+  withHexColor(svc);
   const vis = visibilityClause(req.viewer);
   const articles = db.prepare(`SELECT ${ARTICLE_COLS} FROM articles a ${ARTICLE_JOIN}
     WHERE a.status = 'published' AND ${vis.clause} AND a.service_id = ? ORDER BY a.pinned DESC, a.updated_at DESC`).all(...vis.params, svc.id).map(articleCard);
@@ -906,9 +971,10 @@ app.get('/api/admin/visibility-preview', requireAuth, (req, res) => {
   if (mode === 'staff') viewer = { type: 'staff' };
   else if (mode.startsWith('customer:')) {
     const cid = Number(mode.split(':')[1]);
-    const cust = db.prepare('SELECT id, name, email, group_id FROM customers WHERE id = ? AND disabled = 0').get(cid);
+    const cust = db.prepare('SELECT id, name, email FROM customers WHERE id = ? AND disabled = 0').get(cid);
     if (!cust) return res.status(400).json({ error: 'Customer not found' });
-    viewer = { type: 'customer', id: cust.id, name: cust.name, email: cust.email, group_id: cust.group_id };
+    const groupIds = getCustomerGroupIds(db, cust.id);
+    viewer = { type: 'customer', id: cust.id, name: cust.name, email: cust.email, group_id: groupIds[0] ?? null, group_ids: groupIds };
   } else if (mode !== 'anon') return res.status(400).json({ error: 'viewer must be anon, staff, or customer:<id>' });
   const vis = visibilityClause(viewer);
   const home = {
@@ -916,16 +982,30 @@ app.get('/api/admin/visibility-preview', requireAuth, (req, res) => {
     recent: db.prepare(`SELECT a.title, a.slug FROM articles a ${ARTICLE_JOIN} WHERE a.status='published' AND ${vis.clause} ORDER BY a.updated_at DESC LIMIT 10`).all(...vis.params),
   };
   const catVis = categoryVisibilityWhere(viewer);
-  const categories = db.prepare(`SELECT c.name, c.slug, c.visibility FROM categories c WHERE ${catVis.clause} ORDER BY c.sort_order`).all();
+  const categories = db.prepare(`SELECT c.name, c.slug, c.visibility FROM categories c WHERE ${catVis.clause} ORDER BY c.sort_order`).all(...catVis.params);
   const search = searchArticles(db, 'guide', viewer, 10).map(r => ({ title: r.title, slug: r.slug }));
   res.json({ viewer: mode, home, categories, search_sample: search });
 });
 
 /* ---- Taxonomy CRUD ---- */
 
-function crudRoutes(base, table, fields) {
+function crudRoutes(base, table, fields, hooks = {}) {
+  const coerce = (f, v) => {
+    // '' (sent when no parent / group is chosen) must be stored as NULL,
+    // otherwise the foreign key rejects the write
+    if ((f === 'parent_id' || f === 'group_id') && (v === '' || v === undefined)) return null;
+    if ((f === 'parent_id' || f === 'group_id') && v !== null) return Number(v);
+    // colors are always stored as lowercase hex
+    if (f === 'color') return normalizeColor(v);
+    // a missing category visibility means the table default ('all'), not ''
+    if (f === 'visibility' && (v === '' || v === undefined || v === null)) return 'all';
+    return v;
+  };
   app.get(`/api/admin/${base}`, requireAuth, (req, res) => {
-    res.json(getDb().prepare(`SELECT * FROM ${table} ORDER BY sort_order, name`).all());
+    const db = getDb();
+    let rows = db.prepare(`SELECT * FROM ${table} ORDER BY sort_order, name`).all().map(withHexColor);
+    if (hooks.afterList) rows = hooks.afterList(db, rows);
+    res.json(rows);
   });
   app.post(`/api/admin/${base}`, requireAuth, (req, res) => {
     const db = getDb();
@@ -933,13 +1013,9 @@ function crudRoutes(base, table, fields) {
     if (!b.name || !String(b.name).trim()) return res.status(400).json({ error: 'Name is required' });
     const slug = uniqueSlug(db, b.slug || b.name, table);
     const cols = ['name', 'slug', ...fields];
-    // parent_id '' (sent when no parent is chosen) must be stored as NULL,
-    // otherwise the categories.parent_id foreign key rejects the insert
-    const vals = [String(b.name).trim(), slug, ...fields.map(f => {
-      const v = b[f] ?? '';
-      return f === 'parent_id' && v === '' ? null : v;
-    })];
+    const vals = [String(b.name).trim(), slug, ...fields.map(f => coerce(f, b[f] ?? ''))];
     const id = db.prepare(`INSERT INTO ${table} (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`).run(...vals).lastInsertRowid;
+    if (hooks.afterSave) hooks.afterSave(db, id, b, null);
     logActivity(db, req.user.id, `${base}_create`, `Created ${table} "${String(b.name).trim()}"`);
     res.json({ id, slug });
   });
@@ -949,25 +1025,90 @@ function crudRoutes(base, table, fields) {
     const sets = [];
     const vals = [];
     for (const f of ['name', ...fields]) {
-      if (b[f] !== undefined) { sets.push(`${f} = ?`); vals.push(f === 'name' ? String(b[f]).trim() : b[f]); }
+      if (b[f] !== undefined) { sets.push(`${f} = ?`); vals.push(f === 'name' ? String(b[f]).trim() : coerce(f, b[f])); }
     }
     if (b.slug !== undefined && slugify(b.slug)) { sets.push('slug = ?'); vals.push(uniqueSlug(db, b.slug, table, Number(req.params.id))); }
-    if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
-    vals.push(req.params.id);
-    db.prepare(`UPDATE ${table} SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+    const hasExtra = !!(hooks.extraUpdate && hooks.extraUpdate(b));
+    if (!sets.length && !hasExtra) return res.status(400).json({ error: 'Nothing to update' });
+    const oldRow = hooks.afterSave ? db.prepare(`SELECT * FROM ${table} WHERE id = ?`).get(req.params.id) : null;
+    if (sets.length) {
+      vals.push(req.params.id);
+      db.prepare(`UPDATE ${table} SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+    }
+    if (hooks.afterSave) hooks.afterSave(db, Number(req.params.id), b, oldRow);
     logActivity(db, req.user.id, `${base}_update`, `Updated ${table} #${req.params.id}`);
     res.json({ ok: true });
   });
   app.delete(`/api/admin/${base}/:id`, requireAuth, (req, res) => {
     const db = getDb();
+    if (hooks.beforeDelete) {
+      const err = hooks.beforeDelete(db, Number(req.params.id));
+      if (err) return res.status(400).json({ error: err });
+    }
     db.prepare(`DELETE FROM ${table} WHERE id = ?`).run(req.params.id);
     logActivity(db, req.user.id, `${base}_delete`, `Deleted ${table} #${req.params.id}`);
     res.json({ ok: true });
   });
 }
 
-crudRoutes('categories', 'categories', ['description', 'icon', 'icon_image', 'cover_image', 'color', 'parent_id', 'sort_order', 'visibility']);
-crudRoutes('services', 'services', ['description', 'icon', 'color', 'sort_order']);
+/** Replace one dimension of a category's access restrictions. */
+function setCategoryRestrictions(db, categoryId, table, col, ids, validTable) {
+  const valid = new Set(db.prepare(`SELECT id FROM ${validTable}`).all().map(r => r.id));
+  const wanted = [...new Set((Array.isArray(ids) ? ids : []).map(Number).filter(n => valid.has(n)))];
+  const tx = db.transaction(() => {
+    db.prepare(`DELETE FROM ${table} WHERE category_id = ?`).run(categoryId);
+    const ins = db.prepare(`INSERT OR IGNORE INTO ${table} (category_id, ${col}) VALUES (?, ?)`);
+    for (const v of wanted) ins.run(categoryId, v);
+  });
+  tx();
+  return wanted;
+}
+
+crudRoutes('categories', 'categories', ['description', 'icon', 'icon_image', 'cover_image', 'color', 'parent_id', 'sort_order', 'visibility'], {
+  /* Category access restrictions live in join tables (category_services /
+     category_groups), not columns — handled here alongside the CRUD save. */
+  extraUpdate: b => b.restrict_service_ids !== undefined || b.restrict_group_ids !== undefined,
+  afterSave(db, id, b) {
+    if (b.restrict_service_ids !== undefined) {
+      setCategoryRestrictions(db, id, 'category_services', 'service_id', b.restrict_service_ids, 'services');
+    }
+    if (b.restrict_group_ids !== undefined) {
+      setCategoryRestrictions(db, id, 'category_groups', 'group_id', b.restrict_group_ids, 'customer_groups');
+    }
+  },
+  afterList(db, rows) {
+    const bySvc = new Map(), byGrp = new Map();
+    for (const r of db.prepare('SELECT category_id, service_id FROM category_services').all()) {
+      if (!bySvc.has(r.category_id)) bySvc.set(r.category_id, []);
+      bySvc.get(r.category_id).push(r.service_id);
+    }
+    for (const r of db.prepare('SELECT category_id, group_id FROM category_groups').all()) {
+      if (!byGrp.has(r.category_id)) byGrp.set(r.category_id, []);
+      byGrp.get(r.category_id).push(r.group_id);
+    }
+    for (const row of rows) {
+      row.restrict_service_ids = bySvc.get(row.id) || [];
+      row.restrict_group_ids = byGrp.get(row.id) || [];
+    }
+    return rows;
+  },
+});
+crudRoutes('services', 'services', ['description', 'icon', 'color', 'sort_order', 'group_id'], {
+  /* When a service's mapped group is set or changed, everyone already
+     holding the service gains that membership (additive — never removes). */
+  afterSave(db, id, b, oldRow) {
+    if (b.group_id === undefined) return;
+    const svc = db.prepare('SELECT group_id FROM services WHERE id = ?').get(id);
+    if (svc && svc.group_id && (!oldRow || oldRow.group_id !== svc.group_id)) {
+      applyServiceGroupsToHolders(db, id);
+    }
+  },
+  beforeDelete(db, id) {
+    const n = db.prepare('SELECT COUNT(*) AS n FROM category_services WHERE service_id = ?').get(id).n;
+    if (n > 0) return `This service restricts ${n} category(ies). Remove it from those categories first.`;
+    return null;
+  },
+});
 
 app.get('/api/admin/tags', requireAuth, (req, res) => {
   res.json(getDb().prepare('SELECT * FROM tags ORDER BY name').all());
@@ -1045,8 +1186,8 @@ app.delete('/api/admin/users/:id', requireAuth, requireRole('admin'), (req, res)
 
 app.get('/api/admin/groups', requireAuth, (req, res) => {
   const db = getDb();
-  res.json(db.prepare(`SELECT g.*, (SELECT COUNT(*) FROM customers c WHERE c.group_id = g.id) AS customer_count
-    FROM customer_groups g ORDER BY g.name`).all());
+  res.json(db.prepare(`SELECT g.*, (SELECT COUNT(DISTINCT customer_id) FROM customer_group_members m WHERE m.group_id = g.id) AS customer_count
+    FROM customer_groups g ORDER BY g.name`).all().map(withHexColor));
 });
 app.post('/api/admin/groups', requireAuth, (req, res) => {
   const db = getDb();
@@ -1054,7 +1195,7 @@ app.post('/api/admin/groups', requireAuth, (req, res) => {
   if (!b.name || !String(b.name).trim()) return res.status(400).json({ error: 'Name is required' });
   const slug = uniqueSlug(db, b.slug || b.name, 'customer_groups');
   const id = db.prepare('INSERT INTO customer_groups (name, slug, color, description, created_at) VALUES (?, ?, ?, ?, ?)')
-    .run(String(b.name).trim(), slug, String(b.color || '#8B5CF6').slice(0, 20), String(b.description || '').slice(0, 500), new Date().toISOString()).lastInsertRowid;
+    .run(String(b.name).trim(), slug, normalizeColor(b.color), String(b.description || '').slice(0, 500), new Date().toISOString()).lastInsertRowid;
   logActivity(db, req.user.id, 'group_create', `Created group "${String(b.name).trim()}"`);
   res.json({ id, slug });
 });
@@ -1065,7 +1206,7 @@ app.put('/api/admin/groups/:id', requireAuth, (req, res) => {
   const vals = [];
   if (b.name !== undefined && String(b.name).trim()) { sets.push('name = ?'); vals.push(String(b.name).trim()); }
   if (b.slug !== undefined && slugify(b.slug)) { sets.push('slug = ?'); vals.push(uniqueSlug(db, b.slug, 'customer_groups', Number(req.params.id))); }
-  if (b.color !== undefined) { sets.push('color = ?'); vals.push(String(b.color).slice(0, 20)); }
+  if (b.color !== undefined) { sets.push('color = ?'); vals.push(normalizeColor(b.color)); }
   if (b.description !== undefined) { sets.push('description = ?'); vals.push(String(b.description).slice(0, 500)); }
   if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
   vals.push(req.params.id);
@@ -1077,6 +1218,12 @@ app.delete('/api/admin/groups/:id', requireAuth, (req, res) => {
   const db = getDb();
   const linked = db.prepare('SELECT COUNT(*) AS n FROM article_groups WHERE group_id = ?').get(req.params.id).n;
   if (linked > 0) return res.status(400).json({ error: `This group is used by ${linked} article restriction(s). Remove those first.` });
+  const members = db.prepare('SELECT COUNT(*) AS n FROM customer_group_members WHERE group_id = ?').get(req.params.id).n;
+  if (members > 0) return res.status(400).json({ error: `This group has ${members} customer member(s). Remove them from the group first.` });
+  const svcMapped = db.prepare('SELECT COUNT(*) AS n FROM services WHERE group_id = ?').get(req.params.id).n;
+  if (svcMapped > 0) return res.status(400).json({ error: `This group is mapped from ${svcMapped} service(s). Unmap those first.` });
+  const catRestricted = db.prepare('SELECT COUNT(*) AS n FROM category_groups WHERE group_id = ?').get(req.params.id).n;
+  if (catRestricted > 0) return res.status(400).json({ error: `This group restricts ${catRestricted} category(ies). Remove it from those categories first.` });
   db.prepare('DELETE FROM customer_groups WHERE id = ?').run(req.params.id);
   logActivity(db, req.user.id, 'group_delete', `Deleted group #${req.params.id}`);
   res.json({ ok: true });
@@ -1098,13 +1245,42 @@ app.get('/api/admin/customers', requireAuth, (req, res) => {
   const conds = [];
   const params = [];
   if (q) { conds.push('(c.name LIKE ? OR c.email LIKE ? OR c.company LIKE ?)'); params.push(`%${q}%`, `%${q}%`, `%${q}%`); }
-  if (group_id) { conds.push('c.group_id = ?'); params.push(Number(group_id)); }
+  if (group_id !== undefined && group_id !== '') {
+    if (Number(group_id) === 0) {
+      conds.push('NOT EXISTS (SELECT 1 FROM customer_group_members m WHERE m.customer_id = c.id)');
+    } else {
+      conds.push('EXISTS (SELECT 1 FROM customer_group_members m WHERE m.customer_id = c.id AND m.group_id = ?)');
+      params.push(Number(group_id));
+    }
+  }
   if (disabled !== undefined && disabled !== '') { conds.push('c.disabled = ?'); params.push(disabled === '1' ? 1 : 0); }
   const where = conds.length ? 'WHERE ' + conds.join(' AND ') : '';
-  res.json(db.prepare(`SELECT c.id, c.name, c.email, c.company, c.phone, c.notes, c.group_id,
-      g.name AS group_name, g.color AS group_color, c.disabled, c.created_at, c.last_login_at
+  const rows = db.prepare(`SELECT c.id, c.name, c.email, c.company, c.phone, c.notes, c.group_id,
+      g.name AS group_name, g.color AS group_color, c.disabled, c.created_at, c.last_login_at,
+      CASE WHEN c.password_hash IS NULL OR c.password_hash = '' THEN 0 ELSE 1 END AS has_password
     FROM customers c LEFT JOIN customer_groups g ON g.id = c.group_id ${where}
-    ORDER BY c.name LIMIT 500`).all(...params));
+    ORDER BY c.name LIMIT 500`).all(...params);
+  /* attach all groups + services per customer (membership is the truth) */
+  const groupRows = db.prepare(`SELECT m.customer_id, g.id, g.name, g.color FROM customer_group_members m
+    JOIN customer_groups g ON g.id = m.group_id ORDER BY g.name`).all();
+  const svcRows = db.prepare(`SELECT cs.customer_id, s.id, s.name FROM customer_services cs
+    JOIN services s ON s.id = cs.service_id ORDER BY s.name`).all();
+  const groupsByCust = new Map(), svcByCust = new Map();
+  for (const r of groupRows) {
+    if (!groupsByCust.has(r.customer_id)) groupsByCust.set(r.customer_id, []);
+    groupsByCust.get(r.customer_id).push({ id: r.id, name: r.name, color: normalizeColor(r.color) });
+  }
+  for (const r of svcRows) {
+    if (!svcByCust.has(r.customer_id)) svcByCust.set(r.customer_id, []);
+    svcByCust.get(r.customer_id).push({ id: r.id, name: r.name });
+  }
+  for (const c of rows) {
+    c.groups = groupsByCust.get(c.id) || [];
+    c.services = svcByCust.get(c.id) || [];
+    c.group_color = c.group_color ? normalizeColor(c.group_color) : c.group_color;
+    c.has_password = !!c.has_password;
+  }
+  res.json(rows);
 });
 
 app.post('/api/admin/customers', requireAuth, async (req, res) => {
@@ -1120,6 +1296,13 @@ app.post('/api/admin/customers', requireAuth, async (req, res) => {
       .run(String(b.name).trim(), email, hashPassword(tempPassword),
         String(b.company || '').slice(0, 200), String(b.phone || '').slice(0, 60),
         String(b.notes || '').slice(0, 2000), b.group_id || null, new Date().toISOString()).lastInsertRowid;
+    /* multi-group + multi-service assignment; services grant their mapped
+       groups additively on top of the explicit groups */
+    const groupIds = Array.isArray(b.group_ids) ? b.group_ids.map(Number)
+      : (b.group_id ? [Number(b.group_id)] : []);
+    setCustomerGroups(db, id, groupIds);
+    if (Array.isArray(b.service_ids)) setCustomerServices(db, id, b.service_ids.map(Number));
+    applyServiceGroups(db, id);
     logActivity(db, req.user.id, 'customer_create', `Added customer ${email}`);
     if (b.send_invite) {
       /* The customer sets their own password from the emailed link; the
@@ -1148,18 +1331,100 @@ app.post('/api/admin/customers/:id/invite', requireAuth, async (req, res) => {
   res.json({ ok: true, ...r });
 });
 
-/* Batch customer management: invite / reset-password / disable / enable / delete. */
+/* Send the welcome/onboarding email (purpose 'welcome' token) — for
+   customers who have no password yet, e.g. imported from BookStack. */
+app.post('/api/admin/customers/:id/welcome', requireAuth, async (req, res) => {
+  const db = getDb();
+  const cust = db.prepare('SELECT id, email, name FROM customers WHERE id = ?').get(req.params.id);
+  if (!cust) return res.status(404).json({ error: 'Customer not found' });
+  const r = await mailer.sendCustomerWelcome(db, req, cust);
+  logActivity(db, req.user.id, 'customer_welcome', `Welcome email for ${cust.email} (emailed: ${r.emailed})`);
+  res.json({ ok: true, ...r });
+});
+
+/* ---- Invites (admin) ----
+   An invite = a customer created in the invited state + a password-setup
+   token with purpose 'invite'. The list shows the latest invite token per
+   customer; status derives from that token row. The copyable link comes
+   from the token's encrypted stored copy (the hash remains the only thing
+   verification ever checks); legacy tokens have no copy → no link. */
+
+app.get('/api/admin/invites', requireAuth, (req, res) => {
+  const db = getDb();
+  const settings = getSettings(db);
+  const rows = db.prepare(`SELECT pt.*, c.name, c.email FROM password_tokens pt
+    JOIN customers c ON c.id = pt.customer_id
+    WHERE pt.purpose = 'invite'
+      AND pt.id = (SELECT MAX(pt2.id) FROM password_tokens pt2 WHERE pt2.customer_id = pt.customer_id AND pt2.purpose = 'invite')
+    ORDER BY pt.created_at DESC LIMIT 500`).all();
+  const now = Date.now();
+  res.json(rows.map(r => {
+    const services = getCustomerServices(db, r.customer_id);
+    const raw = mailer.rawTokenFromRow(r);
+    return {
+      customer_id: r.customer_id, name: r.name, email: r.email,
+      services,
+      status: r.used_at ? 'accepted' : (r.expires_at < now ? 'expired' : 'pending'),
+      created_at: new Date(r.created_at).toISOString(),
+      expires_at: new Date(r.expires_at).toISOString(),
+      accepted_at: r.used_at ? new Date(r.used_at).toISOString() : null,
+      link: raw ? mailer.setupLink(settings, req, raw) : null,
+    };
+  }));
+});
+
+app.post('/api/admin/invites', requireAuth, async (req, res) => {
+  const db = getDb();
+  const b = req.body || {};
+  const email = String(b.email || '').trim().toLowerCase();
+  if (!b.name || !String(b.name).trim()) return res.status(400).json({ error: 'Name is required' });
+  if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: 'A valid email is required' });
+  try {
+    /* invited state: no usable password until they accept via the link */
+    const id = db.prepare(`INSERT INTO customers (name, email, password_hash, company, phone, notes, group_id, created_at)
+      VALUES (?, ?, '', '', '', '', NULL, ?)`)
+      .run(String(b.name).trim(), email, new Date().toISOString()).lastInsertRowid;
+    if (Array.isArray(b.service_ids)) setCustomerServices(db, id, b.service_ids.map(Number));
+    if (Array.isArray(b.group_ids)) setCustomerGroups(db, id, b.group_ids.map(Number));
+    applyServiceGroups(db, id);
+    const invite = await mailer.sendCustomerInvite(db, req, { id, email, name: String(b.name).trim() });
+    logActivity(db, req.user.id, 'customer_invite_create', `Invited ${email} (emailed: ${invite.emailed})`);
+    res.json({ id, invite });
+  } catch {
+    res.status(400).json({ error: 'That email is already registered' });
+  }
+});
+
+/* Resend an invite: issues a fresh token (superseding the old one) and
+   re-sends the email. Works for pending and expired invites. */
+app.post('/api/admin/invites/:id/resend', requireAuth, async (req, res) => {
+  const db = getDb();
+  const cust = db.prepare('SELECT id, email, name FROM customers WHERE id = ?').get(req.params.id);
+  if (!cust) return res.status(404).json({ error: 'Customer not found' });
+  const r = await mailer.sendCustomerInvite(db, req, cust);
+  logActivity(db, req.user.id, 'customer_invite', `Resent invite for ${cust.email} (emailed: ${r.emailed})`);
+  res.json({ ok: true, ...r });
+});
+
+/* Batch customer management: invite / reset-password / welcome / disable / enable / delete.
+   'welcome' = the "Send welcome to pending" flow: only customers who have
+   never set a password (empty password_hash — e.g. BookStack imports) get
+   a welcome email; everyone else is skipped with a note. */
 app.post('/api/admin/customers/bulk-action', requireAuth, async (req, res) => {
   const db = getDb();
   const { ids, action } = req.body || {};
-  const ACTIONS = ['invite', 'reset-password', 'disable', 'enable', 'delete'];
+  const ACTIONS = ['invite', 'reset-password', 'welcome', 'disable', 'enable', 'delete'];
   if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ error: 'No customers selected' });
   if (!ACTIONS.includes(action)) return res.status(400).json({ error: 'Unknown action' });
   const results = [];
   for (const id of ids.map(Number).filter(Boolean)) {
-    const cust = db.prepare('SELECT id, email, name FROM customers WHERE id = ?').get(id);
+    const cust = db.prepare('SELECT id, email, name, password_hash FROM customers WHERE id = ?').get(id);
     if (!cust) { results.push({ id, ok: false, error: 'Not found' }); continue; }
-    if (action === 'invite' || action === 'reset-password') {
+    if (action === 'welcome') {
+      if (cust.password_hash) { results.push({ id, email: cust.email, ok: false, error: 'Already has a password' }); continue; }
+      const r = await mailer.sendCustomerWelcome(db, req, cust);
+      results.push({ id, email: cust.email, ok: true, emailed: r.emailed, link: r.link });
+    } else if (action === 'invite' || action === 'reset-password') {
       const reset = action === 'reset-password';
       if (reset) db.prepare('DELETE FROM customer_tokens WHERE customer_id = ?').run(id);
       const r = await mailer.sendCustomerInvite(db, req, cust, { reset });
@@ -1197,7 +1462,6 @@ app.put('/api/admin/customers/:id', requireAuth, (req, res) => {
   if (b.company !== undefined) { sets.push('company = ?'); vals.push(String(b.company).slice(0, 200)); }
   if (b.phone !== undefined) { sets.push('phone = ?'); vals.push(String(b.phone).slice(0, 60)); }
   if (b.notes !== undefined) { sets.push('notes = ?'); vals.push(String(b.notes).slice(0, 2000)); }
-  if (b.group_id !== undefined) { sets.push('group_id = ?'); vals.push(b.group_id ? Number(b.group_id) : null); }
   if (b.disabled !== undefined) { sets.push('disabled = ?'); vals.push(b.disabled ? 1 : 0); }
   let newPassword = '';
   if (b.password) {
@@ -1205,13 +1469,31 @@ app.put('/api/admin/customers/:id', requireAuth, (req, res) => {
     sets.push('password_hash = ?'); vals.push(hashPassword(b.password));
     newPassword = String(b.password);
   }
-  if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
+  const hasMembershipUpdate = b.group_ids !== undefined || b.group_id !== undefined || b.service_ids !== undefined;
+  if (!sets.length && !hasMembershipUpdate) return res.status(400).json({ error: 'Nothing to update' });
+  const cust = db.prepare('SELECT id FROM customers WHERE id = ?').get(req.params.id);
+  if (!cust) return res.status(404).json({ error: 'Customer not found' });
   try {
-    vals.push(req.params.id);
-    db.prepare(`UPDATE customers SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+    if (sets.length) {
+      vals.push(req.params.id);
+      db.prepare(`UPDATE customers SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+    }
   } catch {
     return res.status(400).json({ error: 'That email is already registered' });
   }
+  /* Groups/services are many-to-many now. Order matters: services first,
+     then the explicit groups, then service-mapped groups re-applied
+     additively so they survive an explicit-group edit. A legacy single
+     group_id in the payload is treated as the full membership set. */
+  if (b.service_ids !== undefined) {
+    setCustomerServices(db, cust.id, (Array.isArray(b.service_ids) ? b.service_ids : []).map(Number));
+  }
+  if (b.group_ids !== undefined) {
+    setCustomerGroups(db, cust.id, (Array.isArray(b.group_ids) ? b.group_ids : []).map(Number));
+  } else if (b.group_id !== undefined) {
+    setCustomerGroups(db, cust.id, b.group_id ? [Number(b.group_id)] : []);
+  }
+  if (hasMembershipUpdate) applyServiceGroups(db, cust.id);
   logActivity(db, req.user.id, 'customer_update', `Updated customer #${req.params.id}`);
   res.json({ ok: true, ...(newPassword ? { temp_password: newPassword } : {}) });
 });
@@ -1234,11 +1516,19 @@ app.post('/api/admin/customers/bulk-assign', requireAuth, (req, res) => {
   let n = 0;
   const tx = db.transaction(() => {
     for (const id of ids.map(Number).filter(Boolean)) {
-      n += db.prepare('UPDATE customers SET group_id = ? WHERE id = ?').run(gid, id).changes;
+      /* multi-group world: a chosen group is ADDED to each customer's
+         memberships; "no group" clears all memberships */
+      if (gid) {
+        db.prepare('INSERT OR IGNORE INTO customer_group_members (customer_id, group_id) VALUES (?, ?)').run(id, gid);
+      } else {
+        db.prepare('DELETE FROM customer_group_members WHERE customer_id = ?').run(id);
+      }
+      syncLegacyGroupId(db, id);
+      n++;
     }
   });
   tx();
-  logActivity(db, req.user.id, 'customer_bulk_assign', `Assigned ${n} customer(s) to group ${gid || 'none'}`);
+  logActivity(db, req.user.id, 'customer_bulk_assign', `${gid ? 'Added' : 'Cleared'} group ${gid || 'memberships'} for ${n} customer(s)`);
   res.json({ ok: true, affected: n });
 });
 
@@ -1264,9 +1554,26 @@ function parseCsv(text) {
   return rows.filter(r => r.length > 1 || (r.length === 1 && r[0].trim() !== ''));
 }
 
-/** CSV import with column mapping. Body: { csv, mapping: {name, email, company, phone, notes, group}, group_id, default_password?, skip_header?, send_invites? }
+/* Downloadable template for the customer CSV import — headers match the
+   importer's mapping fields exactly. Services cells hold semicolon-
+   separated service names; Group holds a single group name. */
+app.get('/api/admin/customers/import/template', requireAuth, (req, res) => {
+  const lines = [
+    'Name,Email,Company,Phone,Notes,Group,Services',
+    'Example Customer One,one@example.com,Example Co,+1 555 0100,Example note — replace or delete this row,Premium,"Streaming TV; Music"',
+    'Example Customer Two,two@example.com,,,Imported via CSV,,Streaming TV',
+  ];
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="xc-wiki-customers-template.csv"');
+  res.send(lines.join('\r\n') + '\r\n');
+});
+
+/** CSV import with column mapping. Body: { csv, mapping: {name, email, company, phone, notes, group, services}, group_id, default_password?, skip_header?, send_invites? }
     A "group" column names the customer's group per row (created when it
-    doesn't exist yet) and wins over the single group_id for that row. */
+    doesn't exist yet) and wins over the single group_id for that row. An
+    optional "services" column holds semicolon-separated service names
+    (they must already exist — an unknown name is a row error); holding a
+    service also grants its mapped group, additively. */
 app.post('/api/admin/customers/import', requireAuth, async (req, res) => {
   const db = getDb();
   const { csv, mapping, group_id, default_password, skip_header, send_invites } = req.body || {};
@@ -1304,6 +1611,14 @@ app.post('/api/admin/customers/import', requireAuth, async (req, res) => {
     groupCache.set(key, g.id);
     return g.id;
   };
+  const serviceCache = new Map();
+  const resolveService = (name) => {
+    const key = name.toLowerCase();
+    if (serviceCache.has(key)) return serviceCache.get(key);
+    const s = db.prepare('SELECT id FROM services WHERE LOWER(name) = ?').get(key);
+    serviceCache.set(key, s ? s.id : null);
+    return serviceCache.get(key);
+  };
   const tx = db.transaction(() => {
     dataRows.forEach((r, i) => {
       const lineNo = i + (skip_header === false ? 1 : 2);
@@ -1311,6 +1626,14 @@ app.post('/api/admin/customers/import', requireAuth, async (req, res) => {
       const email = col(r, 'email').toLowerCase();
       if (!name) { errors.push({ row: lineNo, error: 'Missing name' }); return; }
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { errors.push({ row: lineNo, error: `Invalid email "${col(r, 'email')}"` }); return; }
+      /* services column: semicolon-separated names, all must exist */
+      const svcNames = col(r, 'services').split(';').map(s => s.trim()).filter(Boolean);
+      const svcIds = [];
+      for (const sn of svcNames) {
+        const sid = resolveService(sn);
+        if (!sid) { errors.push({ row: lineNo, error: `Unknown service "${sn}" — create the service first, or fix the name` }); return; }
+        svcIds.push(sid);
+      }
       const groupName = col(r, 'group');
       const rowGroup = groupName ? resolveGroup(groupName) : gid;
       try {
@@ -1319,6 +1642,11 @@ app.post('/api/admin/customers/import', requireAuth, async (req, res) => {
           .run(name.slice(0, 200), email, hashPassword(defPw),
             col(r, 'company').slice(0, 200), col(r, 'phone').slice(0, 60), col(r, 'notes').slice(0, 2000),
             rowGroup, new Date().toISOString()).lastInsertRowid;
+        if (rowGroup) db.prepare('INSERT OR IGNORE INTO customer_group_members (customer_id, group_id) VALUES (?, ?)').run(id, rowGroup);
+        if (svcIds.length) {
+          setCustomerServices(db, id, svcIds);
+          applyServiceGroups(db, id);
+        }
         imported.push({ id, name, email });
       } catch {
         errors.push({ row: lineNo, error: `Duplicate email "${email}"` });
@@ -1431,6 +1759,10 @@ app.put('/api/admin/settings', requireAuth, (req, res) => {
   const db = getDb();
   const body = { ...(req.body || {}) };
   if (body.custom_css !== undefined) body.custom_css = sanitizeCustomCss(body.custom_css);
+  /* branding colors are always stored as lowercase hex */
+  for (const k of COLOR_SETTING_KEYS) {
+    if (body[k] !== undefined) body[k] = normalizeColor(body[k], body[k]);
+  }
   const s = setSettings(db, body);
   logActivity(db, req.user.id, 'settings', 'Updated site settings');
   res.json(s);
@@ -1465,6 +1797,15 @@ app.put('/api/admin/email-settings', requireAuth, (req, res) => {
     next.smtp_from_email = em;
   }
   if (b.email_alerts_feedback !== undefined) next.email_alerts_feedback = b.email_alerts_feedback ? '1' : '0';
+  if (b.notify_invite_accepted !== undefined) next.notify_invite_accepted = b.notify_invite_accepted ? '1' : '0';
+  if (b.discord_webhook_url !== undefined) {
+    const url = String(b.discord_webhook_url).trim().slice(0, 500);
+    /* real webhooks are https; http is tolerated only for localhost (dev/test stubs) */
+    if (url && !/^https:\/\//i.test(url) && !/^http:\/\/(127\.0\.0\.1|localhost)(?::\d+)?(?:\/|$)/i.test(url)) {
+      return res.status(400).json({ error: 'Discord webhook URL must start with https://' });
+    }
+    next.discord_webhook_url = url;
+  }
   if (b.clear_smtp_pass) next.smtp_pass_enc = '';
   else if (b.smtp_pass) next.smtp_pass_enc = mailer.setSmtpPassword(getSettings(db), String(b.smtp_pass));
   setSettings(db, next);
@@ -1663,9 +2004,10 @@ app.get('/api/admin/cloud/callback/:provider', async (req, res) => {
   const db = getDb();
   const provider = req.params.provider;
   const { code, state, error, error_description } = req.query;
+  const escHtml = (s) => String(s || '').replace(/[<>&"]/g, ch => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[ch]));
   const done = (ok, msg) => res.send(
     `<html><body style="font-family:sans-serif;padding:40px"><h2>${ok ? '✅ Connected' : '❌ Connection failed'}</h2>` +
-    `<p>${ok ? `Your ${provider === 'google' ? 'Google Drive' : 'OneDrive'} account is connected. You can close this tab and return to XC Wiki.` : `Error: ${msg || 'unknown'}`}</p>` +
+    `<p>${ok ? `Your ${provider === 'google' ? 'Google Drive' : 'OneDrive'} account is connected.${msg ? ' ' + escHtml(msg) : ''} You can close this tab and return to XC Wiki.` : `Error: ${escHtml(msg || 'unknown')}`}</p>` +
     `<script>setTimeout(()=>window.close(), 4000)</script></body></html>`);
   if (error) return done(false, String(error_description || error));
   if (!code || !cloud.consumeOAuthState(String(state || ''), provider)) {
@@ -1675,10 +2017,30 @@ app.get('/api/admin/cloud/callback/:provider', async (req, res) => {
     const tokens = await cloud.exchangeCode(db, provider, String(code), cloud.redirectUriFor(req, provider));
     cloud.storeTokens(db, provider, tokens);
     logActivity(db, null, 'cloud_connected', `${provider} connected for backups`);
-    done(true);
+    /* Verify for real before celebrating: identity + folder + list probe. */
+    let note = '';
+    try {
+      const t = await cloud.testConnection(db, provider);
+      note = `Verified: the “${t.folder_name}” folder is reachable${t.account_email ? ` on ${t.account_email}` : ''} (${t.backups_found} backup(s) found).`;
+    } catch (e) {
+      note = `But the verification test failed: ${e.message} — use “Test connection” in the backup panel to retry.`;
+    }
+    done(true, note);
   } catch (e) {
     cloud.markError(db, provider, e.message);
     done(false, e.message);
+  }
+});
+
+/* Real capability probe: identity + app folder + list (not just a token). */
+app.post('/api/admin/cloud/test/:provider', requireAuth, async (req, res) => {
+  const db = getDb();
+  try {
+    const r = await cloud.testConnection(db, req.params.provider);
+    logActivity(db, req.user.id, 'cloud_test', `Connection test passed for ${req.params.provider} (${r.account_email || 'account unknown'}, ${r.backups_found} backup(s) in folder)`);
+    res.json(r);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
   }
 });
 

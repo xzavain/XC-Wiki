@@ -4,6 +4,12 @@ A knowledge base / wiki website system: a public reader portal (search, categori
 
 Stack: **Node 22 + Express + better-sqlite3**, vanilla JS SPA. No build step — clone, `npm install`, `npm start`.
 
+## What's new in 1.1.5
+
+- **"Your Services" is now a personal, display-only list** — the homepage cards no longer click through to service article lists (no links, no arrows); they simply show the signed-in viewer the services attached to their account, with icon, name and description. The "View All My Services" link next to the section is gone (the All Services page itself still exists in the site navigation, unchanged).
+- **Only your own services are listed** — previously the section showed the first two services from the whole catalog; it now shows exactly the services attached to the viewer (all of them, no cap), and a viewer with none sees a clean "No services are attached to your account yet" note instead of other people's services.
+- **Admins can attach services to staff accounts — including their own** — Admin → Users → Edit now has the same services multi-select the customer form has. Staff attachments are stored separately from customer assignments and are purely presentational: they drive that staff member's own homepage list, while admin/management views still show every service, and the existing protections are unchanged (you still can't disable or delete your own account).
+
 ## What's new in 1.1.4
 
 - **Fixed the category cover Upload button appearing to do nothing** — the cover field (and the branding logo/favicon/hero fields, plus the group/service chip pickers) wrapped the Upload button's `<label>` inside another `<label>`, which is invalid HTML with inconsistent browser behavior; the field wrappers are now plain containers, so the button works the same everywhere.

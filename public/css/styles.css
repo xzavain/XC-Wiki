@@ -192,12 +192,11 @@ p { margin: 0 0 1em; }
   background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
   padding: 16px; display: flex; gap: 12px; align-items: center; color: var(--text); transition: border-color .15s;
 }
-.svc-card:hover { border-color: var(--accent); text-decoration: none; }
+/* Your Services cards are display-only (1.1.5): no hover/link affordance. */
 .svc-card .si { width: 38px; height: 38px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; flex-shrink: 0; }
 .svc-card .svc-txt { flex: 1 1 auto; min-width: 0; }
 .svc-card strong { display: block; font-size: .9rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .svc-card small { color: var(--muted); font-size: .78rem; }
-.svc-card .arr { margin-left: auto; color: var(--muted2); flex-shrink: 0; }
 
 /* continue reading */
 .continue-card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; }

@@ -401,16 +401,14 @@ async function viewHome() {
     </div>
 
     <div class="section">
-      <div class="section-head"><div><h2>Your Services</h2><p class="sub">Guides specific to your active services.</p></div>
-      <a href="/services" style="font-size:.8rem">View All My Services →</a></div>
-      <div class="svc-grid">
-        ${d.services.slice(0, 2).map(svc => `
-          <a class="svc-card" href="/service/${esc(svc.slug)}">
+      <div class="section-head"><div><h2>Your Services</h2><p class="sub">The services attached to your account.</p></div></div>
+      ${d.services.length ? `<div class="svc-grid">
+        ${d.services.map(svc => `
+          <div class="svc-card">
             <span class="si" style="background:${esc(svc.color)}22">${esc(svc.icon)}</span>
             <span class="svc-txt"><strong>${esc(svc.name)}</strong><small>${esc(svc.description)}</small></span>
-            <span class="arr">→</span>
-          </a>`).join('')}
-      </div>
+          </div>`).join('')}
+      </div>` : '<div class="empty">No services are attached to your account yet.</div>'}
     </div>
 
     ${cont}

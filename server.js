@@ -15,6 +15,7 @@ const {
   readingTimeMin, makeExcerpt, slugify, uniqueSlug,
   normalizeColor, getCustomerGroupIds, getCustomerGroups, getCustomerServices,
   setCustomerGroups, setCustomerServices, applyServiceGroups, applyServiceGroupsToHolders,
+  getUserServiceIds, getUserServices, setUserServices,
   syncLegacyGroupId,
 } = require('./lib/db');
 const { hashPassword, verifyPassword, newToken, expiryFor } = require('./lib/auth');
@@ -499,6 +500,19 @@ const ARTICLE_JOIN = `
 const ARTICLE_COLS = `a.*, c.name AS category_name, c.slug AS category_slug, c.icon AS category_icon, c.icon_image AS category_icon_image, c.cover_image AS category_cover_image, c.color AS category_color,
   s.name AS service_name, s.slug AS service_slug, s.icon AS service_icon`;
 
+/** The signed-in viewer's OWN services for the homepage "Your Services"
+    section (display-only since 1.1.5): customers read their
+    customer_services assignments, staff read user_services attachments.
+    Never the whole catalog, never inferred from visible articles. */
+function viewerOwnServices(db, viewer) {
+  if (!viewer || viewer.id == null) return [];
+  const join = viewer.type === 'staff'
+    ? 'JOIN user_services x ON x.service_id = s.id AND x.user_id = ?'
+    : 'JOIN customer_services x ON x.service_id = s.id AND x.customer_id = ?';
+  return db.prepare(`SELECT s.* FROM services s ${join} ORDER BY s.sort_order, s.name`)
+    .all(viewer.id).map(withHexColor);
+}
+
 app.get('/api/home', requireSignedIn, (req, res) => {
   const db = getDb();
   const pub = `a.status = 'published'`;
@@ -506,7 +520,7 @@ app.get('/api/home', requireSignedIn, (req, res) => {
   const catVis = categoryVisibilityWhere(req.viewer);
   const categories = db.prepare(`SELECT c.*, (SELECT COUNT(*) FROM articles a WHERE a.category_id = c.id AND ${pub} AND ${vis.clause}) AS article_count
     FROM categories c WHERE ${catVis.clause} ORDER BY c.sort_order, c.name`).all(...vis.params, ...catVis.params);
-  const services = db.prepare('SELECT * FROM services ORDER BY sort_order, name').all();
+  const services = viewerOwnServices(db, req.viewer);
   const featured = db.prepare(`SELECT ${ARTICLE_COLS} FROM articles a ${ARTICLE_JOIN} WHERE ${pub} AND ${vis.clause} AND a.featured = 1 ORDER BY a.pinned DESC, a.updated_at DESC LIMIT 6`).all(...vis.params).map(articleCard);
   const recent = db.prepare(`SELECT ${ARTICLE_COLS} FROM articles a ${ARTICLE_JOIN} WHERE ${pub} AND ${vis.clause} ORDER BY a.updated_at DESC LIMIT 6`).all(...vis.params).map(articleCard);
   const popular = db.prepare(`SELECT ${ARTICLE_COLS} FROM articles a ${ARTICLE_JOIN} WHERE ${pub} AND ${vis.clause} ORDER BY a.views DESC LIMIT 6`).all(...vis.params).map(articleCard);
@@ -1152,16 +1166,29 @@ app.delete('/api/admin/redirects/:id', requireAuth, (req, res) => {
 /* ---- Users (admin only) ---- */
 
 app.get('/api/admin/users', requireAuth, requireRole('admin'), (req, res) => {
-  res.json(getDb().prepare('SELECT id, email, display_name, role, disabled, created_at FROM users ORDER BY created_at').all());
+  const db = getDb();
+  const rows = db.prepare('SELECT id, email, display_name, role, disabled, created_at FROM users ORDER BY created_at').all();
+  /* attach each user's own services (user_services), same shape the
+     customers list uses, so the edit form can pre-tick them */
+  const svcRows = db.prepare(`SELECT us.user_id, s.id, s.name FROM user_services us
+    JOIN services s ON s.id = us.service_id ORDER BY s.name`).all();
+  const svcByUser = new Map();
+  for (const r of svcRows) {
+    if (!svcByUser.has(r.user_id)) svcByUser.set(r.user_id, []);
+    svcByUser.get(r.user_id).push({ id: r.id, name: r.name });
+  }
+  for (const u of rows) u.services = svcByUser.get(u.id) || [];
+  res.json(rows);
 });
 app.post('/api/admin/users', requireAuth, requireRole('admin'), (req, res) => {
   const db = getDb();
-  const { email, password, display_name, role } = req.body || {};
+  const { email, password, display_name, role, service_ids } = req.body || {};
   if (!email || !password || password.length < 8) return res.status(400).json({ error: 'Email and a password of 8+ characters are required' });
   try {
     const id = db.prepare('INSERT INTO users (email, password_hash, display_name, role, created_at) VALUES (?, ?, ?, ?, ?)')
       .run(String(email).trim().toLowerCase(), hashPassword(password), String(display_name || email).slice(0, 80),
         ['admin', 'editor', 'viewer'].includes(role) ? role : 'editor', new Date().toISOString()).lastInsertRowid;
+    if (Array.isArray(service_ids)) setUserServices(db, id, service_ids);
     logActivity(db, req.user.id, 'user_create', `Invited ${email}`);
     res.json({ id });
   } catch {
@@ -1177,10 +1204,17 @@ app.put('/api/admin/users/:id', requireAuth, requireRole('admin'), (req, res) =>
   if (b.role !== undefined && ['admin', 'editor', 'viewer'].includes(b.role)) { sets.push('role = ?'); vals.push(b.role); }
   if (b.disabled !== undefined) { sets.push('disabled = ?'); vals.push(b.disabled ? 1 : 0); }
   if (b.password) { sets.push('password_hash = ?'); vals.push(hashPassword(b.password)); }
-  if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
+  /* service_ids attaches services to the user (incl. an admin editing
+     their OWN account — the one self-edit this opens; the disable/delete
+     self-guards below are unchanged) */
+  const hasSvc = Array.isArray(b.service_ids);
+  if (!sets.length && !hasSvc) return res.status(400).json({ error: 'Nothing to update' });
   if (Number(req.params.id) === req.user.id && b.disabled) return res.status(400).json({ error: 'You cannot disable your own account' });
-  vals.push(req.params.id);
-  db.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+  if (sets.length) {
+    vals.push(req.params.id);
+    db.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+  }
+  if (hasSvc) setUserServices(db, Number(req.params.id), b.service_ids);
   logActivity(db, req.user.id, 'user_update', `Updated user #${req.params.id}`);
   res.json({ ok: true });
 });

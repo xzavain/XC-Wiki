@@ -407,7 +407,7 @@ async function viewHome() {
         ${d.services.slice(0, 2).map(svc => `
           <a class="svc-card" href="/service/${esc(svc.slug)}">
             <span class="si" style="background:${esc(svc.color)}22">${esc(svc.icon)}</span>
-            <span><strong>${esc(svc.name)}</strong><small>${esc(svc.description)}</small></span>
+            <span class="svc-txt"><strong>${esc(svc.name)}</strong><small>${esc(svc.description)}</small></span>
             <span class="arr">→</span>
           </a>`).join('')}
       </div>
@@ -553,7 +553,7 @@ async function viewTaxonomyList(kind) {
   const d = await api('/api/' + kind);
   app.innerHTML = `<div class="crumbs"><a href="/">Home</a> › ${titles[kind]}</div>
     <h1 style="margin-top:6px">${titles[kind]}</h1>
-    <div class="cat-grid" style="grid-template-columns:repeat(3,1fr)">
+    <div class="cat-grid">
     ${d.map(x => `
       <a class="cat-card" href="/${kind === 'categories' ? 'category' : kind === 'services' ? 'service' : 'tag'}/${esc(x.slug)}">
         ${kind === 'categories' ? catCardVisual(x) : `<span class="ci" style="background:${esc(x.color || '#3B82F6')}22;color:${esc(x.color || '#3B82F6')}">${esc(x.icon || '🏷️')}</span>`}

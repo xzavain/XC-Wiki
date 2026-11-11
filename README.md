@@ -4,6 +4,11 @@ A knowledge base / wiki website system: a public reader portal (search, categori
 
 Stack: **Node 22 + Express + better-sqlite3**, vanilla JS SPA. No build step — clone, `npm install`, `npm start`.
 
+## What's new in 1.1.3
+
+- **Category restrictions are group-based only** — categories can no longer be restricted by service; the "Restrict to services" picker and badges are gone from Admin → Categories, and visibility is decided by group restrictions alone (articles keep their own group-based visibility as before). Services themselves are unchanged — still assigned to customers and still used by invites, CSV import and BookStack import. Existing category→service restriction rows from earlier versions are left in the database untouched but are no longer enforced.
+- **Service names never stack word-per-line** — following the 1.1.2 chip fix, the remaining service buttons/cards got the same treatment: homepage "Your Services" cards, the All Services / category card titles, and the service chip on article pages now keep icon + name on one line (long names truncate with an ellipsis instead of wrapping), and the services list no longer squeezes its cards into three fixed columns on narrow screens.
+
 ## What's new in 1.1.2
 
 - **Fixed picker chips stacking names word-per-line** — the service/group chips in the Invites panel, customer form, and category restrictions now size to their content (icon + full name on one line) and wrap as whole chips instead of squeezing.

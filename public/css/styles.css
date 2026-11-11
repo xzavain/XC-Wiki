@@ -178,7 +178,7 @@ p { margin: 0 0 1em; }
 }
 .cat-card:hover { transform: translateY(-2px); border-color: var(--accent); text-decoration: none; }
 .cat-card .ci { width: 52px; height: 52px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 1.6rem; }
-.cat-card strong { font-size: 1.08rem; }
+.cat-card strong { font-size: 1.08rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .cat-card small { color: var(--muted); font-size: .82rem; }
 .cat-card .arr { position: absolute; right: 14px; top: 20px; color: var(--muted2); font-size: 1.1rem; }
 
@@ -194,9 +194,10 @@ p { margin: 0 0 1em; }
 }
 .svc-card:hover { border-color: var(--accent); text-decoration: none; }
 .svc-card .si { width: 38px; height: 38px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; flex-shrink: 0; }
-.svc-card strong { display: block; font-size: .9rem; }
+.svc-card .svc-txt { flex: 1 1 auto; min-width: 0; }
+.svc-card strong { display: block; font-size: .9rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .svc-card small { color: var(--muted); font-size: .78rem; }
-.svc-card .arr { margin-left: auto; color: var(--muted2); }
+.svc-card .arr { margin-left: auto; color: var(--muted2); flex-shrink: 0; }
 
 /* continue reading */
 .continue-card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; }
@@ -234,6 +235,7 @@ p { margin: 0 0 1em; }
 .article-body { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 30px 34px; min-width: 0; }
 .article-body h1 { font-size: 1.7rem; }
 .article-meta { color: var(--muted); font-size: .8rem; margin-bottom: 18px; display: flex; gap: 12px; flex-wrap: wrap; }
+.article-meta > span { white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .md { color: var(--text); max-width: 75ch; }
 .md h2 { font-size: 1.3rem; margin-top: 1.6em; padding-bottom: .3em; border-bottom: 1px solid var(--border); }
 .md h3 { font-size: 1.1rem; margin-top: 1.4em; }

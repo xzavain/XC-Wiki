@@ -528,12 +528,8 @@ const AdminView = {
     const rows = kind === 'categories' ? this.tax.categories : this.tax.services;
     const isCat = kind === 'categories';
     const restrictionText = (r) => {
-      const sn = (r.restrict_service_ids || []).map(id => (this.tax.services.find(s => s.id === id) || {}).name).filter(Boolean);
       const gn = (r.restrict_group_ids || []).map(id => (this.groups.find(g => g.id === id) || {}).name).filter(Boolean);
-      const parts = [];
-      if (sn.length) parts.push('Services: ' + sn.join(', '));
-      if (gn.length) parts.push('Groups: ' + gn.join(', '));
-      return parts.length ? '🔒 ' + parts.join(' · ') : 'Unrestricted';
+      return gn.length ? '🔒 Groups: ' + gn.join(', ') : 'Unrestricted';
     };
     main.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center"><h2 style="margin:0">${title}</h2>
@@ -584,12 +580,8 @@ const AdminView = {
             <option value="staff" ${r?.visibility === 'staff' ? 'selected' : ''}>🔒 Staff only</option>
           </select></label>
         </div>
-        <div class="form-row">
-          <label class="fld"><span>Restrict to services <small style="color:var(--muted)">(empty = no restriction; a customer needs at least one of these services to see this category and its articles)</small></span>
-            <span style="display:flex;gap:6px;flex-wrap:wrap">${this.tax.services.map(s => `<label class="chip-pick"><input type="checkbox" class="tx-rsvc" value="${s.id}" ${(r?.restrict_service_ids || []).includes(s.id) ? 'checked' : ''}> ${esc(s.name)}</label>`).join('') || '<small style="color:var(--muted)">No services yet.</small>'}</span></label>
-          <label class="fld"><span>Restrict to groups <small style="color:var(--muted)">(empty = no restriction; a customer must belong to at least one of these groups — when both are set, both must pass)</small></span>
-            <span style="display:flex;gap:6px;flex-wrap:wrap">${this.groups.map(g => `<label class="chip-pick"><input type="checkbox" class="tx-rgrp" value="${g.id}" ${(r?.restrict_group_ids || []).includes(g.id) ? 'checked' : ''}> ${esc(g.name)}</label>`).join('') || '<small style="color:var(--muted)">No groups yet.</small>'}</span></label>
-        </div>` : ''}
+        <label class="fld"><span>Restrict to groups <small style="color:var(--muted)">(empty = no restriction; a customer must belong to at least one of these groups to see this category and its articles)</small></span>
+          <span style="display:flex;gap:6px;flex-wrap:wrap">${this.groups.map(g => `<label class="chip-pick"><input type="checkbox" class="tx-rgrp" value="${g.id}" ${(r?.restrict_group_ids || []).includes(g.id) ? 'checked' : ''}> ${esc(g.name)}</label>`).join('') || '<small style="color:var(--muted)">No groups yet.</small>'}</span></label>` : ''}
         <div style="display:flex;gap:8px"><button class="btn small" id="tx-save">Save</button><button class="btn ghost small" id="tx-cancel">Cancel</button></div>
         </div>`;
       document.getElementById('tx-cancel').onclick = () => this.taxManager(main, kind);
@@ -627,7 +619,6 @@ const AdminView = {
           const p = document.getElementById('tx-parent');
           payload.parent_id = p && p.value ? Number(p.value) : null;
           payload.visibility = document.getElementById('tx-vis').value === 'staff' ? 'staff' : 'all';
-          payload.restrict_service_ids = [...document.querySelectorAll('.tx-rsvc:checked')].map(x => Number(x.value));
           payload.restrict_group_ids = [...document.querySelectorAll('.tx-rgrp:checked')].map(x => Number(x.value));
         }
         try {

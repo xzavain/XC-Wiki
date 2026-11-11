@@ -246,25 +246,25 @@ function requireSignedIn(req, res, next) {
  * - customer: 'all', plus 'groups' articles linked to ANY group the customer
  *   belongs to (multi-group membership); never staff-only categories
  */
-/* Category service/group restriction fragments (categories aliased `c`).
-   A category is restriction-free when it has no rows in the join table;
-   otherwise the customer must match at least one row. Staff bypass. */
-const CAT_SERVICE_OK = `(NOT EXISTS (SELECT 1 FROM category_services cs WHERE cs.category_id = c.id)
-  OR EXISTS (SELECT 1 FROM category_services cs JOIN customer_services mine ON mine.service_id = cs.service_id
-             WHERE cs.category_id = c.id AND mine.customer_id = ?))`;
+/* Category restriction fragment (categories aliased `c`). Restrictions
+   are GROUP-based only: a category is restriction-free when it has no
+   rows in category_groups; otherwise the customer must belong to at
+   least one listed group. Staff bypass. The legacy category_services
+   table stays in the schema and its stored rows are left untouched,
+   but it is no longer read or enforced anywhere — services never gate
+   content visibility. */
 const CAT_GROUP_OK = `(NOT EXISTS (SELECT 1 FROM category_groups cg WHERE cg.category_id = c.id)
   OR EXISTS (SELECT 1 FROM category_groups cg JOIN customer_group_members mine ON mine.group_id = cg.group_id
              WHERE cg.category_id = c.id AND mine.customer_id = ?))`;
-const CAT_UNRESTRICTED = `(NOT EXISTS (SELECT 1 FROM category_services cs WHERE cs.category_id = c.id)
-  AND NOT EXISTS (SELECT 1 FROM category_groups cg WHERE cg.category_id = c.id))`;
+const CAT_UNRESTRICTED = `(NOT EXISTS (SELECT 1 FROM category_groups cg WHERE cg.category_id = c.id))`;
 
 function visibilityClause(viewer) {
   if (viewer && viewer.type === 'staff') return { clause: '1=1', params: [] };
   if (viewer && viewer.type === 'customer') {
     /* the article's category must also be one the customer may see:
-       public visibility + service/group restriction checks */
-    const catOk = `(a.category_id IS NULL OR (c.visibility = 'all' AND ${CAT_SERVICE_OK} AND ${CAT_GROUP_OK}))`;
-    const catParams = [viewer.id, viewer.id];
+       public visibility + group restriction check */
+    const catOk = `(a.category_id IS NULL OR (c.visibility = 'all' AND ${CAT_GROUP_OK}))`;
+    const catParams = [viewer.id];
     const ids = Array.isArray(viewer.group_ids) && viewer.group_ids.length
       ? viewer.group_ids
       : (viewer.group_id ? [viewer.group_id] : []);
@@ -281,14 +281,13 @@ function visibilityClause(viewer) {
 }
 
 /** Extra WHERE for category listings: hide staff-only categories from
-    non-staff, and apply service/group category restrictions. A signed-in
+    non-staff, and apply group category restrictions. A signed-in
     customer sees a category when it is public AND (unrestricted OR they
-    hold a listed service) AND (unrestricted OR they are in a listed
-    group). Staff bypass restrictions entirely. */
+    belong to a listed group). Staff bypass restrictions entirely. */
 function categoryVisibilityWhere(viewer) {
   if (viewer && viewer.type === 'staff') return { clause: '1=1', params: [] };
   if (viewer && viewer.type === 'customer') {
-    return { clause: `c.visibility = 'all' AND ${CAT_SERVICE_OK} AND ${CAT_GROUP_OK}`, params: [viewer.id, viewer.id] };
+    return { clause: `c.visibility = 'all' AND ${CAT_GROUP_OK}`, params: [viewer.id] };
   }
   return { clause: `c.visibility = 'all' AND ${CAT_UNRESTRICTED}`, params: [] };
 }
@@ -1053,7 +1052,8 @@ function crudRoutes(base, table, fields, hooks = {}) {
   });
 }
 
-/** Replace one dimension of a category's access restrictions. */
+/** Replace a category's group access restrictions. (Restrictions are
+    group-based only since 1.1.3; there is no service dimension.) */
 function setCategoryRestrictions(db, categoryId, table, col, ids, validTable) {
   const valid = new Set(db.prepare(`SELECT id FROM ${validTable}`).all().map(r => r.id));
   const wanted = [...new Set((Array.isArray(ids) ? ids : []).map(Number).filter(n => valid.has(n)))];
@@ -1067,29 +1067,24 @@ function setCategoryRestrictions(db, categoryId, table, col, ids, validTable) {
 }
 
 crudRoutes('categories', 'categories', ['description', 'icon', 'icon_image', 'cover_image', 'color', 'parent_id', 'sort_order', 'visibility'], {
-  /* Category access restrictions live in join tables (category_services /
-     category_groups), not columns — handled here alongside the CRUD save. */
-  extraUpdate: b => b.restrict_service_ids !== undefined || b.restrict_group_ids !== undefined,
+  /* Category access restrictions live in the category_groups join table,
+     not columns — handled here alongside the CRUD save. A stray
+     restrict_service_ids in a payload is ignored: service restrictions
+     no longer exist (legacy category_services rows are left in place,
+     unenforced). */
+  extraUpdate: b => b.restrict_group_ids !== undefined,
   afterSave(db, id, b) {
-    if (b.restrict_service_ids !== undefined) {
-      setCategoryRestrictions(db, id, 'category_services', 'service_id', b.restrict_service_ids, 'services');
-    }
     if (b.restrict_group_ids !== undefined) {
       setCategoryRestrictions(db, id, 'category_groups', 'group_id', b.restrict_group_ids, 'customer_groups');
     }
   },
   afterList(db, rows) {
-    const bySvc = new Map(), byGrp = new Map();
-    for (const r of db.prepare('SELECT category_id, service_id FROM category_services').all()) {
-      if (!bySvc.has(r.category_id)) bySvc.set(r.category_id, []);
-      bySvc.get(r.category_id).push(r.service_id);
-    }
+    const byGrp = new Map();
     for (const r of db.prepare('SELECT category_id, group_id FROM category_groups').all()) {
       if (!byGrp.has(r.category_id)) byGrp.set(r.category_id, []);
       byGrp.get(r.category_id).push(r.group_id);
     }
     for (const row of rows) {
-      row.restrict_service_ids = bySvc.get(row.id) || [];
       row.restrict_group_ids = byGrp.get(row.id) || [];
     }
     return rows;
@@ -1105,11 +1100,11 @@ crudRoutes('services', 'services', ['description', 'icon', 'color', 'sort_order'
       applyServiceGroupsToHolders(db, id);
     }
   },
-  beforeDelete(db, id) {
-    const n = db.prepare('SELECT COUNT(*) AS n FROM category_services WHERE service_id = ?').get(id).n;
-    if (n > 0) return `This service restricts ${n} category(ies). Remove it from those categories first.`;
-    return null;
-  },
+  /* No delete guard: service deletion used to be blocked while the
+     service restricted categories, but service restrictions no longer
+     exist (1.1.3) — legacy category_services rows cascade away with
+     the category/service as the FKs dictate, and customer holdings
+     cascade as before. */
 });
 
 app.get('/api/admin/tags', requireAuth, (req, res) => {

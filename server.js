@@ -446,7 +446,7 @@ const PUBLIC_BRANDING_KEYS = [
   'site_title', 'site_tagline', 'logo_text', 'logo_url', 'logo_height', 'favicon_url',
   'hero_title', 'hero_description', 'hero_image_url', 'hero_image_fit', 'hero_image_position',
   'hero_overlay', 'hero_show_cards', 'popular_searches',
-  'footer_text', 'copyright_line', 'powered_by', 'default_theme',
+  'footer_text', 'copyright_line', 'powered_by', 'default_theme', 'theme_mode',
   'primary_color', 'accent_color',
   'dark_bg', 'dark_surface', 'dark_text',
   'light_bg', 'light_surface', 'light_text',
@@ -1802,6 +1802,9 @@ app.put('/api/admin/settings', requireAuth, (req, res) => {
   const db = getDb();
   const body = { ...(req.body || {}) };
   if (body.custom_css !== undefined) body.custom_css = sanitizeCustomCss(body.custom_css);
+  /* theme_mode is an enum ('dark' | 'light' | 'system'); anything
+     unrecognized is normalized to the site default, dark. */
+  if (body.theme_mode !== undefined) body.theme_mode = ['dark', 'light', 'system'].includes(body.theme_mode) ? body.theme_mode : 'dark';
   /* branding colors are always stored as lowercase hex */
   for (const k of COLOR_SETTING_KEYS) {
     if (body[k] !== undefined) body[k] = normalizeColor(body[k], body[k]);

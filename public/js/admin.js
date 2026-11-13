@@ -1468,6 +1468,13 @@ const AdminView = {
               </select></label>
             </div>
             <div class="form-row">
+              <label class="fld"><span>Theme mode <small style="color:var(--muted)">(applies to every visitor, admin included)</small></span><select id="b-thememode">
+                <option value="dark" ${s.theme_mode === 'light' || s.theme_mode === 'system' ? '' : 'selected'}>Dark only (default)</option>
+                <option value="light" ${s.theme_mode === 'light' ? 'selected' : ''}>Light only</option>
+                <option value="system" ${s.theme_mode === 'system' ? 'selected' : ''}>Match visitor's device</option>
+              </select></label>
+            </div>
+            <div class="form-row">
               <div class="fld"><span>Logo image URL</span>
                 <span style="display:flex;gap:8px"><input id="b-logourl" value="${esc(s.logo_url)}" placeholder="/media/…" style="flex:1">
                 <label class="btn ghost small" style="cursor:pointer">Upload<input type="file" id="b-logo-file" accept="image/*" style="display:none"></label>
@@ -1603,7 +1610,7 @@ const AdminView = {
       const payload = {
         site_title: v('b-title'), site_tagline: v('b-tagline'), logo_text: v('b-logo'),
         logo_url: v('b-logourl'), logo_height: String(Math.max(32, Math.min(72, parseInt(v('b-logoheight-num'), 10) || 48))),
-        favicon_url: v('b-fav'), default_theme: v('b-theme'),
+        favicon_url: v('b-fav'), default_theme: v('b-theme'), theme_mode: v('b-thememode'),
         primary_color: normalizeColorJs(v('b-primary-txt')), accent_color: normalizeColorJs(v('b-accent-txt')),
         dark_bg: normalizeColorJs(v('b-dbg-txt')), dark_surface: normalizeColorJs(v('b-dsurf-txt')), dark_text: normalizeColorJs(v('b-dtext-txt')),
         light_bg: normalizeColorJs(v('b-lbg-txt')), light_surface: normalizeColorJs(v('b-lsurf-txt')), light_text: normalizeColorJs(v('b-ltext-txt')),
@@ -1620,6 +1627,7 @@ const AdminView = {
         App.settings = { ...App.settings, ...updated };
         try { App.settings.popular_searches = JSON.parse(updated.popular_searches || '[]'); } catch {}
         applyBranding(App.settings);
+        syncThemeChrome(); applyTheme();
         toast('Branding saved — applied instantly', 'ok');
       } catch (e) { toast(e.message, 'err'); }
     };

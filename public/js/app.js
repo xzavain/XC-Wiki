@@ -105,20 +105,44 @@ function timeAgo(iso) {
 
 /* ---------------- theme ---------------- */
 
+/* Site-wide theme mode (Admin → Site & Branding → Theme mode):
+   'dark' forces the dark theme for every visitor, 'light' forces
+   light, and 'system' hands the choice back to each visitor (their
+   toggle pick, else their device preference). Anything missing or
+   unrecognized means 'dark' — the site default. A forced mode wins
+   over any theme a visitor previously stored on this device. */
+function siteThemeMode() {
+  const m = App.settings && App.settings.theme_mode;
+  return m === 'light' || m === 'system' ? m : 'dark';
+}
+
 function applyTheme() {
-  let pref = store.get('xcwiki_theme') || 'system';
-  let effective = pref;
-  if (pref === 'system') effective = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  const mode = siteThemeMode();
+  let pref = mode;
+  let effective = mode;
+  if (mode === 'system') {
+    pref = store.get('xcwiki_theme') || 'system';
+    effective = pref;
+    if (pref === 'system') effective = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  }
   document.documentElement.setAttribute('data-theme', effective);
   document.querySelectorAll('.theme-toggle button').forEach(b => {
-    b.classList.toggle('active', b.dataset.themeSet === pref);
+    b.classList.toggle('active', mode === 'system' && b.dataset.themeSet === pref);
   });
 }
 
+/* The visitor theme toggle only exists when the site mode lets
+   visitors choose; in a forced mode it is hidden, not just ignored. */
+function syncThemeChrome() {
+  const t = document.querySelector('.theme-toggle');
+  if (t) t.classList.toggle('hidden', siteThemeMode() !== 'system');
+}
+
 function initTheme() {
-  if (!store.get('xcwiki_theme') && App.settings) {
+  if (siteThemeMode() === 'system' && !store.get('xcwiki_theme') && App.settings) {
     store.set('xcwiki_theme', App.settings.default_theme === 'light' ? 'light' : 'system');
   }
+  syncThemeChrome();
   applyTheme();
   document.querySelectorAll('.theme-toggle button').forEach(b => {
     b.onclick = () => { store.set('xcwiki_theme', b.dataset.themeSet); applyTheme(); };

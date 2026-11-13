@@ -4,6 +4,10 @@ A knowledge base / wiki website system: a public reader portal (search, categori
 
 Stack: **Node 22 + Express + better-sqlite3**, vanilla JS SPA. No build step — clone, `npm install`, `npm start`.
 
+## What's new in 1.2.1
+
+- **Dark mode is now the site default — and the admin decides** — a new **Theme mode** control in Admin → Site & Branding: **Dark only** (the default: every visitor, admin included, sees the dark theme and the visitor theme toggle is hidden), **Light only** (the same, in light), or **Match visitor's device** (the theme toggle returns and each visitor's device preference rules, with the Default theme seeding a first visit). Existing sites pick up Dark only automatically — no setup needed — and a theme a visitor previously chose on their device no longer overrides a forced mode.
+
 ## What's new in 1.2.0
 
 - **Categories have a separate page banner** — a category can now carry two different images: the **cover image** (homepage cards and listings, unchanged) and a new **page banner** shown as the wide banner at the top of the category page itself. Set it in Admin → Categories with the same upload / library / clear controls as the cover. Leave the page banner empty and the category page keeps using the cover image, exactly as before — existing categories need no changes.

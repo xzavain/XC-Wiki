@@ -75,7 +75,22 @@ p { margin: 0 0 1em; }
 .brand:hover { text-decoration: none; }
 .brand-mark {
   width: 34px; height: 34px; border-radius: 9px; display: flex; align-items: center; justify-content: center;
-  font-weight: 800; font-size: .8rem; color: #fff; background: linear-gradient(135deg, #2E7CF6, #7C5CFF);
+  font-weight: 800; font-size: .8rem; color: var(--text); background: transparent;
+  position: relative; isolation: isolate;
+}
+/* Logo glow (v1.2.5): there is NO tile — nothing paints a rectangle behind
+   the logo (no background, border, or box-shadow on the wrapper). The glow
+   is a single oversized, UNCLIPPED layer centered on the mark: an ambient
+   elliptical pool of the branding green (the primary color) whose falloff
+   is powered to true zero at 70% of its extent — and that extent is far
+   larger than the logo — so it reads as light pooled in the header with
+   no boundary at any logo size. (A clipped or masked glow layer leaves a
+   straight seam where the layer ends; this one is never clipped.) Only
+   the glow fades; the logo image itself stays at full opacity. */
+.brand-mark::before {
+  content: ''; position: absolute; left: 50%; top: 50%; width: 380%; height: 210%;
+  transform: translate(-50%, -50%); z-index: -1; pointer-events: none;
+  background: radial-gradient(ellipse at center, color-mix(in srgb, var(--accent) 45%, transparent) 0%, color-mix(in srgb, var(--accent) 28%, transparent) 28%, color-mix(in srgb, var(--accent) 12%, transparent) 48%, transparent 70%);
 }
 .brand-text { display: flex; flex-direction: column; line-height: 1.15; }
 .brand-text strong { font-size: .92rem; }
@@ -242,11 +257,12 @@ p { margin: 0 0 1em; }
 .md pre { background: #0A0D15; border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; overflow-x: auto; }
 [data-theme="light"] .md pre { background: #0F172A; }
 .md pre code { background: none; border: 0; padding: 0; color: #DCE6F5; }
-.md blockquote { border-left: 3px solid var(--accent); margin: 1em 0; padding: .4em 1em; background: var(--card2); border-radius: 0 8px 8px 0; }
+.md blockquote { border-left: 3px solid var(--muted2); margin: 1em 0; padding: .4em 1em; background: var(--card2); border-radius: 0 8px 8px 0; }
 .md table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: .88rem; }
 .md th, .md td { border: 1px solid var(--border); padding: 8px 12px; text-align: left; }
 .md th { background: var(--card2); }
-.md img { max-width: 100%; border-radius: 8px; }
+.md img { max-width: 100%; height: auto !important; border-radius: 8px; }
+.md h1[id], .md h2[id], .md h3[id], .md h4[id], .md h5[id], .md h6[id] { scroll-margin-top: 130px; }
 .md ul.task-list { list-style: none; padding-left: 4px; }
 .toc { position: sticky; top: 130px; align-self: start; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; font-size: .82rem; max-height: 70vh; overflow-y: auto; }
 .toc strong { display: block; margin-bottom: 8px; font-size: .78rem; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
@@ -380,6 +396,10 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); bo
   .hero { padding: 24px 20px; }
   .hero h1 { font-size: 1.5rem; }
   .article-body { padding: 20px; }
+  /* Floated/aligned article images stack full-width on small screens instead
+     of squeezing the text beside them (v1.2.5). */
+  .md img[style*="float"], .md img.align-left, .md img.align-right, .md img.alignleft, .md img.alignright, .md img[align="left"], .md img[align="right"],
+  .wysi-preview img[style*="float"], .wysi-preview img.align-left, .wysi-preview img.align-right, .wysi-preview img.alignleft, .wysi-preview img.alignright, .wysi-preview img[align="left"], .wysi-preview img[align="right"] { float: none !important; display: block; margin: .8em auto; max-width: 100%; height: auto !important; }
   .form-row, .form-row3 { grid-template-columns: 1fr; }
   .theme-toggle button:not(.active) { display: none; }
 }
@@ -401,7 +421,18 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); bo
 .wysi-edit { min-height: 320px; max-height: 560px; overflow: auto; padding: 16px 18px; outline: none; }
 .wysi-edit:focus { box-shadow: inset 0 0 0 2px var(--accent); }
 .wysi-edit h1, .wysi-edit h2, .wysi-edit h3 { margin: .6em 0 .4em; }
-.wysi-edit blockquote { border-left: 3px solid var(--accent); margin: 1em 0; padding: .4em 1em; color: var(--muted); background: var(--bg2); border-radius: 0 8px 8px 0; }
+.wysi-edit blockquote { border-left: 3px solid var(--muted2); margin: 1em 0; padding: .4em 1em; color: var(--muted); background: var(--bg2); border-radius: 0 8px 8px 0; }
+/* Blockquote style chooser (v1.2.5): appears under the toolbar whenever the
+   caret is inside a blockquote; swatches restyle THAT quote. */
+.wysi-bqbar { display: none; align-items: center; gap: 6px; flex-wrap: wrap; padding: 7px 10px; background: var(--input); border-top: 1px solid var(--border); font-size: .8rem; }
+.wysi-bqbar.open { display: flex; }
+.wysi-bqbar .bq-label { color: var(--muted); font-weight: 600; margin-right: 2px; }
+.bq-swatch { display: inline-flex; align-items: center; gap: 6px; background: var(--card); border: 1px solid var(--border); border-left: 4px solid var(--muted2); border-radius: 7px; color: var(--text); font-size: .78rem; font-weight: 600; padding: 5px 10px; cursor: pointer; }
+.bq-swatch[data-bq="bq-info"] { border-left-color: var(--accent2); }
+.bq-swatch[data-bq="bq-success"] { border-left-color: var(--green); }
+.bq-swatch[data-bq="bq-warning"] { border-left-color: var(--amber); }
+.bq-swatch[data-bq="bq-danger"] { border-left-color: var(--red); }
+.bq-swatch.active { outline: 2px solid var(--accent); outline-offset: 1px; }
 .wysi-edit pre { background: #0F172A; color: #E2E8F0; padding: 12px; border-radius: 8px; overflow: auto; }
 .wysi-edit table { border-collapse: collapse; width: 100%; margin: 1em 0; }
 .wysi-edit table th, .wysi-edit table td { border: 1px solid var(--border); padding: 8px 10px; }
@@ -422,10 +453,21 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); bo
 .md table, .wysi-preview table { border-collapse: collapse; width: 100%; margin: 1em 0; display: block; overflow-x: auto; }
 .md table th, .md table td, .wysi-preview table th, .wysi-preview table td { border: 1px solid var(--border); padding: 8px 12px; text-align: left; }
 .md table th, .wysi-preview table th { background: var(--bg2); }
-.md img, .wysi-preview img { max-width: 100%; border-radius: 8px; }
-.md blockquote, .wysi-preview blockquote { border-left: 3px solid var(--accent); margin: 1em 0; padding: .4em 1em; color: var(--muted); background: var(--bg2); border-radius: 0 8px 8px 0; }
+/* Responsive article images (v1.2.5): scale to the container, keep the aspect
+   ratio, and override fixed width/height attributes + inline pixel sizes in
+   stored content (height:auto !important is what defeats a stored height). */
+.md img, .wysi-preview img, .wysi-edit img { max-width: 100%; height: auto !important; border-radius: 8px; }
+.md blockquote, .wysi-preview blockquote { border-left: 3px solid var(--muted2); margin: 1em 0; padding: .4em 1em; color: var(--muted); background: var(--bg2); border-radius: 0 8px 8px 0; }
+/* Blockquote styles (v1.2.5): an unclassed quote IS Default (neutral, above).
+   The bq-* classes come from the editor's style picker and survive the
+   sanitizer; colors use the theme variables so both themes work. */
+.md blockquote.bq-default, .wysi-preview blockquote.bq-default, .wysi-edit blockquote.bq-default { border-left-color: var(--muted2); }
+.md blockquote.bq-info, .wysi-preview blockquote.bq-info, .wysi-edit blockquote.bq-info { border-left-color: var(--accent2); background: rgba(59, 130, 246, .10); }
+.md blockquote.bq-success, .wysi-preview blockquote.bq-success, .wysi-edit blockquote.bq-success { border-left-color: var(--green); background: rgba(16, 185, 129, .10); }
+.md blockquote.bq-warning, .wysi-preview blockquote.bq-warning, .wysi-edit blockquote.bq-warning { border-left-color: var(--amber); background: rgba(245, 158, 11, .12); }
+.md blockquote.bq-danger, .wysi-preview blockquote.bq-danger, .wysi-edit blockquote.bq-danger { border-left-color: var(--red); background: rgba(239, 68, 68, .10); }
 .md hr, .wysi-preview hr { border: 0; border-top: 2px solid var(--border); margin: 1.2em 0; }
-.md figure, .wysi-preview figure { margin: 1em 0; text-align: center; }
+.md figure, .wysi-preview figure { margin: 1em 0; text-align: center; max-width: 100%; }
 .md figcaption, .wysi-preview figcaption { font-size: .8rem; color: var(--muted); }
 
 /* ---------- misc new components ---------- */
@@ -437,6 +479,12 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); bo
    name from breaking the layout. */
 .chip-pick { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; white-space: nowrap; max-width: 100%; overflow: hidden; background: var(--input); border: 1px solid var(--border); border-radius: 999px; padding: 5px 12px; font-size: .8rem; cursor: pointer; }
 .chip-pick input { flex: 0 0 auto; accent-color: var(--accent); }
+/* Selectable service boxes (v1.2.5): the service NAME is the label — a ticked
+   box is obviously ON (accent border + tint), an unticked one plainly off. */
+.svc-pick { display: inline-flex; align-items: center; gap: 8px; flex: 0 0 auto; max-width: 100%; background: var(--input); border: 1.5px solid var(--border); border-radius: 10px; padding: 9px 13px; font-size: .86rem; font-weight: 600; cursor: pointer; transition: border-color .12s ease, background .12s ease; }
+.svc-pick input { flex: 0 0 auto; width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
+.svc-pick .svc-dot { flex: 0 0 auto; width: 9px; height: 9px; border-radius: 50%; }
+.svc-pick:has(input:checked) { border-color: var(--accent); background: rgba(46, 124, 246, .13); box-shadow: 0 0 0 1px var(--accent) inset; }
 .pw-once { background: #fef9c3; color: #713f12; border: 1px solid #fde68a; border-radius: 10px; padding: 10px 14px; font-size: .85rem; }
 .pw-once code { font-size: 1rem; font-weight: 700; user-select: all; }
 [data-theme="dark"] .pw-once { background: #422006; color: #fde68a; border-color: #92400e; }

@@ -56,7 +56,7 @@ const AdminView = {
       ['customers', '🙋 Customers'], ['groups', '👪 Groups'],
       ['redirects', '↪ Redirects'], ['feedback', '💬 Feedback'], ['search', '🔍 Search Analytics'],
       ['branding', '🎨 Branding'], ['backup', '☁️ Cloud Backup'], ['bookstack', '📚 BookStack Import'],
-      ['demo', '🧪 Demo Content'], ['users', '👥 Users'], ['viewas', '👁 View As'], ['settings', '⚙️ Settings'],
+      ['demo', '🧪 Demo Content'], ['users', '👥 Staff'], ['viewas', '👁 View As'], ['settings', '⚙️ Settings'],
     ];
     app.innerHTML = `
       <div class="crumbs"><a href="/">Knowledge Base</a> › Staff Dashboard</div>
@@ -173,10 +173,16 @@ const AdminView = {
         <button class="btn danger small" data-bulk="delete">Delete</button>
       </div>
       <label class="art-select-all"><input type="checkbox" id="sel-all"> Select all articles</label>
+      <p id="art-order-hint" style="color:var(--muted);font-size:.82rem;margin:8px 0 0"></p>
       <div id="art-groups"></div>`;
 
-    const rowHtml = (a) => `
-        <tr>
+    /* v1.2.5: when no filters are on, each row also carries the manual
+       per-category order controls (drag handle + ↑ ↓) as its first
+       cell; with filters on the rendered rows are a subset, so the
+       controls are hidden rather than reorder a partial list. */
+    const rowHtml = (a, orderable) => `
+        <tr data-art-row="${a.id}">
+          ${orderable ? `<td style="white-space:nowrap;width:88px"><span class="tx-drag" data-adrag="${a.id}" title="Drag to reorder within this category">⠿</span> <button class="link-btn" data-aup="${a.id}" title="Move up">↑</button> <button class="link-btn" data-adown="${a.id}" title="Move down">↓</button></td>` : ''}
           <td><input type="checkbox" class="sel" value="${a.id}"></td>
           <td><a href="/admin/article/${a.id}" style="color:var(--text);font-weight:600">${esc(a.title)}</a><br><small style="color:var(--muted2)">/${esc(a.slug)}</small></td>
           <td><span class="pill ${a.status}">${a.status}</span>${a.featured ? ' ⭐' : ''}</td>
@@ -213,17 +219,22 @@ const AdminView = {
       // Uncategorized goes last; with no filters it always shows (mirroring the
       // customer structure), with filters only sections containing matches show.
       if (uncat.length || !filtering) sections.push({ cat: null, rows: uncat });
+      const orderable = !filtering;
       const visible = sections.filter(s => !filtering || s.rows.length);
+      const hint = document.getElementById('art-order-hint');
+      if (hint) hint.textContent = orderable
+        ? 'Drag a row by its ⠿ handle — or use ↑ ↓ — to change the order articles appear in on the category page. Changes save immediately.'
+        : 'Ordering is paused while filters are on — clear the search, category, service, status and visibility filters to reorder articles.';
       wrap.innerHTML = visible.map(s => `
-      <section class="art-group">
+      <section class="art-group" data-art-cat="${s.cat ? s.cat.id : ''}">
         <div class="art-group-head">
           ${s.cat
             ? `<span class="chip" style="background:${esc(s.cat.color || '#3B82F6')}22">${s.cat.icon_image ? `<img src="${esc(s.cat.icon_image)}" alt="">` : esc(s.cat.icon || '📁')}</span><h3>${esc(s.cat.name)}</h3>${s.cat.visibility === 'staff' ? '<span class="pill staff">staff</span>' : ''}<span class="art-group-count">${s.rows.length} article${s.rows.length === 1 ? '' : 's'}</span><button class="link-btn" data-edit-cat="${s.cat.id}">✏️ Edit category</button>`
             : `<span class="chip" style="background:var(--card2)">🗂️</span><h3>Uncategorized</h3><span class="art-group-count">${s.rows.length} article${s.rows.length === 1 ? '' : 's'}</span>`}
         </div>
         <div style="overflow-x:auto"><table class="tbl"><thead><tr>
-          <th><input type="checkbox" class="sel-all-group" title="Select all in this category"></th><th>Title</th><th>Status</th><th>Visibility</th><th>Views</th><th>Updated</th><th></th>
-        </tr></thead><tbody>${s.rows.map(rowHtml).join('') || '<tr><td colspan="7" class="empty">No articles yet.</td></tr>'}</tbody></table></div>
+          ${orderable ? '<th></th>' : ''}<th><input type="checkbox" class="sel-all-group" title="Select all in this category"></th><th>Title</th><th>Status</th><th>Visibility</th><th>Views</th><th>Updated</th><th></th>
+        </tr></thead><tbody>${s.rows.map(a => rowHtml(a, orderable)).join('') || `<tr><td colspan="${orderable ? 8 : 7}" class="empty">No articles yet.</td></tr>`}</tbody></table></div>
       </section>`).join('') || '<div class="empty" style="padding:26px;text-align:center;color:var(--muted)">No articles match these filters.</div>';
       wrap.querySelectorAll('[data-edit-cat]').forEach(b => b.onclick = () => {
         try { sessionStorage.setItem('xcwiki_edit_category', b.dataset.editCat); } catch { /* storage unavailable */ }
@@ -254,6 +265,60 @@ const AdminView = {
         wrap.querySelectorAll('.sel').forEach(c => c.checked = e.target.checked); updateBulk();
       };
       updateBulk();
+      // v1.2.5 per-category article ordering (mirrors the Taxonomy category
+      // ordering): scoped to each group section, saves the group's full order
+      // immediately via PUT /api/admin/articles/order.
+      if (orderable) wrap.querySelectorAll('section.art-group').forEach(sec => {
+        const catRaw = sec.dataset.artCat;
+        const catId = catRaw === '' ? null : Number(catRaw);
+        const saveOrder = async () => {
+          const ids = [...sec.querySelectorAll('[data-art-row]')].map(r => Number(r.dataset.artRow));
+          if (!ids.length) return;
+          try {
+            await api('/api/admin/articles/order', { method: 'PUT', body: JSON.stringify({ category_id: catId, ids }) });
+            toast('Order saved', 'ok');
+          } catch (e) { toast(e.message, 'err'); }
+          load();
+        };
+        const moveRow = (row, dir) => {
+          const sib = dir < 0 ? row.previousElementSibling : row.nextElementSibling;
+          if (!sib || !sib.hasAttribute('data-art-row')) return;
+          if (dir < 0) row.parentNode.insertBefore(row, sib); else row.parentNode.insertBefore(sib, row);
+          saveOrder();
+        };
+        sec.querySelectorAll('[data-aup]').forEach(b => b.onclick = () => moveRow(b.closest('[data-art-row]'), -1));
+        sec.querySelectorAll('[data-adown]').forEach(b => b.onclick = () => moveRow(b.closest('[data-art-row]'), 1));
+        let dragRow = null;
+        sec.querySelectorAll('[data-art-row]').forEach(row => {
+          const handle = row.querySelector('[data-adrag]');
+          if (!handle) return;
+          handle.addEventListener('mousedown', () => row.setAttribute('draggable', 'true'));
+          handle.addEventListener('touchstart', () => row.setAttribute('draggable', 'true'), { passive: true });
+          row.addEventListener('dragstart', (e) => { dragRow = row; row.classList.add('tx-dragging'); e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', ''); } catch { /* older browsers */ } });
+          row.addEventListener('dragend', () => {
+            row.classList.remove('tx-dragging'); row.removeAttribute('draggable');
+            sec.querySelectorAll('.tx-drop-above,.tx-drop-below').forEach(r => r.classList.remove('tx-drop-above', 'tx-drop-below'));
+            dragRow = null; saveOrder();
+          });
+          row.addEventListener('dragover', (e) => {
+            if (!dragRow || dragRow === row) return;
+            e.preventDefault();
+            const rect = row.getBoundingClientRect();
+            const below = (e.clientY - rect.top) > rect.height / 2;
+            row.classList.toggle('tx-drop-below', below);
+            row.classList.toggle('tx-drop-above', !below);
+          });
+          row.addEventListener('dragleave', () => row.classList.remove('tx-drop-above', 'tx-drop-below'));
+          row.addEventListener('drop', (e) => {
+            e.preventDefault();
+            if (!dragRow || dragRow === row) return;
+            const rect = row.getBoundingClientRect();
+            const below = (e.clientY - rect.top) > rect.height / 2;
+            row.classList.remove('tx-drop-above', 'tx-drop-below');
+            if (below) row.parentNode.insertBefore(dragRow, row.nextSibling); else row.parentNode.insertBefore(dragRow, row);
+          });
+        });
+      });
     };
     document.getElementById('f-go').onclick = load;
     document.getElementById('f-q').onkeydown = (e) => { if (e.key === 'Enter') load(); };
@@ -418,13 +483,14 @@ const AdminView = {
         <label class="fld"><span>Title</span><input id="ed-title" value="${esc(a?.title || '')}"></label>
         <label class="fld"><span>Slug (auto if blank; renaming keeps a redirect)</span><input id="ed-slug" value="${esc(a?.slug || '')}" placeholder="auto-generated"></label>
       </div>
-      <div class="form-row3">
+      <div class="form-row">
         <label class="fld"><span>Category</span><select id="ed-cat"><option value="">—</option>${this.tax.categories.map(c => `<option value="${c.id}" ${a?.category_id === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>
-        <label class="fld"><span>Service</span><select id="ed-svc"><option value="">—</option>${this.tax.services.map(s => `<option value="${s.id}" ${a?.service_id === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label>
         <label class="fld"><span>Status</span><select id="ed-status">
           ${['draft', 'published', 'scheduled', 'archived'].map(s => `<option ${a?.status === s ? 'selected' : (!a && s === 'published' ? 'selected' : '')}>${s}</option>`).join('')}
         </select></label>
       </div>
+      <div class="fld"><span>Services <small style="color:var(--muted)">(tick every service this article belongs to — it appears under each of them)</small></span>
+        <span style="display:flex;gap:8px;flex-wrap:wrap">${this.tax.services.map(s => { const sel = (a?.service_ids || (a?.service_id ? [a.service_id] : [])).includes(s.id); return `<label class="svc-pick"><input type="checkbox" class="ed-svc" value="${s.id}" ${sel ? 'checked' : ''}><span class="svc-dot" style="background:${esc(normalizeColorJs(s.color || '#3B82F6'))}"></span><span>${esc(s.name)}</span></label>`; }).join('') || '<small style="color:var(--muted)">No services yet.</small>'}</span></div>
       <div class="panel" style="margin:12px 0"><h3 style="margin-top:0">👁 Visibility</h3>
         <div class="check-row"><input type="radio" name="ed-vis" value="all" id="ev-all" ${vis === 'all' ? 'checked' : ''}> <label for="ev-all"><strong>Everyone</strong> — public, including anonymous visitors</label></div>
         <div class="check-row"><input type="radio" name="ed-vis" value="groups" id="ev-groups" ${vis === 'groups' ? 'checked' : ''}> <label for="ev-groups"><strong>Customer groups</strong> — only signed-in customers in the selected groups</label></div>
@@ -472,7 +538,7 @@ const AdminView = {
         slug: document.getElementById('ed-slug').value,
         content_html: ed.getHtml(),
         category_id: document.getElementById('ed-cat').value || null,
-        service_id: document.getElementById('ed-svc').value || null,
+        service_ids: [...document.querySelectorAll('.ed-svc:checked')].map(c => Number(c.value)),
         status,
         visibility,
         group_ids,
@@ -1208,7 +1274,7 @@ const AdminView = {
             <label class="fld"><span>Email</span><input id="iv-email" type="email" placeholder="jane@example.com"></label>
           </div>
           <div class="fld"><span>Services</span>
-            <span style="display:flex;gap:6px;flex-wrap:wrap">${(this.tax.services || []).map(s => `<label class="chip-pick"><input type="checkbox" class="iv-svc" value="${s.id}"> ${esc(s.name)}</label>`).join('') || '<small style="color:var(--muted)">No services yet.</small>'}</span></div>
+            <span style="display:flex;gap:6px;flex-wrap:wrap">${(this.tax.services || []).map(s => `<label class="svc-pick"><input type="checkbox" class="iv-svc" value="${s.id}"><span class="svc-dot" style="background:${esc(normalizeColorJs(s.color || '#3B82F6'))}"></span><span>${esc(s.name)}</span></label>`).join('') || '<small style="color:var(--muted)">No services yet.</small>'}</span></div>
           <div style="display:flex;gap:8px;align-items:center"><button class="btn small" id="iv-create">✉ Create & send invite</button><span id="iv-out" style="font-size:.85rem"></span></div>
           <div style="overflow-x:auto;margin-top:14px"><table class="tbl"><thead><tr><th>Name</th><th>Email</th><th>Services</th><th>Status</th><th>Sent</th><th>Expires</th><th></th></tr></thead>
           <tbody>${invites.map(iv => `
@@ -1277,7 +1343,7 @@ const AdminView = {
       <div class="fld"><span>Groups <small style="color:var(--muted)">(tick all that apply — group-restricted articles are visible to members of any of them)</small></span>
         <span style="display:flex;gap:6px;flex-wrap:wrap">${this.groups.map(g => `<label class="chip-pick"><input type="checkbox" class="cf-group" value="${g.id}" ${(c?.groups || []).some(x => x.id === g.id) || c?.group_id === g.id ? 'checked' : ''}> <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${esc(normalizeColorJs(g.color))}"></span> ${esc(g.name)}</label>`).join('') || '<small style="color:var(--muted)">No groups yet.</small>'}</span></div>
       <div class="fld"><span>Services <small style="color:var(--muted)">(a service mapped to a group also adds the customer to that group)</small></span>
-        <span style="display:flex;gap:6px;flex-wrap:wrap">${(this.tax.services || []).map(s => `<label class="chip-pick"><input type="checkbox" class="cf-svc" value="${s.id}" ${(c?.services || []).some(x => x.id === s.id) ? 'checked' : ''}> ${esc(s.name)}</label>`).join('') || '<small style="color:var(--muted)">No services yet.</small>'}</span></div>
+        <span style="display:flex;gap:6px;flex-wrap:wrap">${(this.tax.services || []).map(s => `<label class="svc-pick"><input type="checkbox" class="cf-svc" value="${s.id}" ${(c?.services || []).some(x => x.id === s.id) ? 'checked' : ''}><span class="svc-dot" style="background:${esc(normalizeColorJs(s.color || '#3B82F6'))}"></span><span>${esc(s.name)}</span></label>`).join('') || '<small style="color:var(--muted)">No services yet.</small>'}</span></div>
       <label class="fld"><span>Notes (staff only)</span><textarea id="cf-notes" rows="2">${esc(c?.notes || '')}</textarea></label>
       <label class="fld"><span>${c ? 'Reset password (blank = keep current)' : 'Password (blank = auto-generated, shown once)'}</span><input id="cf-pass" type="text" placeholder="${c ? '—' : 'auto-generate'}"></label>
       ${c ? '<div style="margin-top:6px"><button class="btn ghost small" id="cf-resetlink" type="button">✉ Email a password reset link</button> <span style="color:var(--muted);font-size:.8rem">They set a new password themselves; their sessions are signed out.</span></div>'
@@ -1930,19 +1996,35 @@ const AdminView = {
   async users(main) {
     if (App.user.role !== 'admin') { main.innerHTML = '<div class="empty">Admins only.</div>'; return; }
     const rows = await api('/api/admin/users');
-    main.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2 style="margin:0">Users</h2>
-      <button class="btn small" id="u-new">＋ Invite user</button></div>
-      <table class="tbl" style="margin-top:12px"><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Created</th><th></th></tr></thead><tbody>
-      ${rows.map(u => `<tr><td><strong>${esc(u.display_name)}</strong></td><td>${esc(u.email)}</td>
+    /* v1.2.5: this page is the STAFF directory (it never listed
+       customers — those live under Customers), so it is labeled Staff
+       and grouped the way the Customers/Articles pages group their
+       rows: Admins first, then everyone else on the staff team
+       (editors + viewers), each section with its own header + count.
+       Display only — the route, API and every row action are unchanged. */
+    const rowHtml = (u) => `<tr><td><strong>${esc(u.display_name)}</strong></td><td>${esc(u.email)}</td>
         <td><span class="pill ${u.role === 'admin' ? 'scheduled' : 'draft'}">${u.role}</span></td>
         <td>${u.disabled ? '<span class="pill archived">disabled</span>' : '<span class="pill published">active</span>'}</td>
         <td>${timeAgo(u.created_at)}</td>
-        <td style="white-space:nowrap"><button class="link-btn" data-uedit="${u.id}">Edit</button> · <button class="link-btn" data-udel="${u.id}" style="color:var(--red)">Delete</button></td></tr>`).join('')}
-      </tbody></table><div id="u-form"></div>`;
+        <td style="white-space:nowrap"><button class="link-btn" data-uedit="${u.id}">Edit</button> · <button class="link-btn" data-udel="${u.id}" style="color:var(--red)">Delete</button></td></tr>`;
+    const sectionHtml = (title, icon, list) => `
+      <section class="art-group">
+        <div class="art-group-head"><span class="chip" style="background:var(--card2)">${icon}</span><h3>${title}</h3><span class="art-group-count">${list.length} ${list.length === 1 ? 'person' : 'people'}</span></div>
+        <div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Created</th><th></th></tr></thead><tbody>
+        ${list.map(rowHtml).join('') || '<tr><td colspan="6" class="empty">None yet.</td></tr>'}
+        </tbody></table></div>
+      </section>`;
+    const admins = rows.filter(u => u.role === 'admin');
+    const staff = rows.filter(u => u.role !== 'admin');
+    main.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center"><h2 style="margin:0">Staff</h2>
+      <button class="btn small" id="u-new">＋ Invite staff</button></div>
+      ${sectionHtml('Admins', '🛡️', admins)}
+      ${sectionHtml('Staff', '👥', staff)}
+      <div id="u-form"></div>`;
 
     const form = (u) => {
       document.getElementById('u-form').innerHTML = `
-        <div class="panel" style="margin-top:14px"><h3>${u ? 'Edit user' : 'Invite user'}</h3>
+        <div class="panel" style="margin-top:14px"><h3>${u ? 'Edit staff member' : 'Invite staff member'}</h3>
         <div class="form-row">
           <label class="fld"><span>Display name</span><input id="u-name" value="${esc(u?.display_name || '')}"></label>
           <label class="fld"><span>Email</span><input id="u-email" type="email" value="${esc(u?.email || '')}" ${u ? 'disabled' : ''}></label>
@@ -1953,7 +2035,7 @@ const AdminView = {
           <label class="fld"><span>Status</span><select id="u-dis"><option value="0" ${!u?.disabled ? 'selected' : ''}>Active</option><option value="1" ${u?.disabled ? 'selected' : ''}>Disabled</option></select></label>
         </div>
         <div class="fld"><span>Services <small style="color:var(--muted)">(attached to this user's account — they personalize their homepage recommendations)</small></span>
-          <span style="display:flex;gap:6px;flex-wrap:wrap">${(this.tax.services || []).map(s => `<label class="chip-pick"><input type="checkbox" class="u-svc" value="${s.id}" ${(u?.services || []).some(x => x.id === s.id) ? 'checked' : ''}> ${esc(s.name)}</label>`).join('') || '<small style="color:var(--muted)">No services yet.</small>'}</span></div>
+          <span style="display:flex;gap:6px;flex-wrap:wrap">${(this.tax.services || []).map(s => `<label class="svc-pick"><input type="checkbox" class="u-svc" value="${s.id}" ${(u?.services || []).some(x => x.id === s.id) ? 'checked' : ''}><span class="svc-dot" style="background:${esc(normalizeColorJs(s.color || '#3B82F6'))}"></span><span>${esc(s.name)}</span></label>`).join('') || '<small style="color:var(--muted)">No services yet.</small>'}</span></div>
         <div style="display:flex;gap:8px"><button class="btn small" id="u-save">Save</button><button class="btn ghost small" id="u-cancel">Cancel</button></div></div>`;
       document.getElementById('u-cancel').onclick = () => this.users(main);
       document.getElementById('u-save').onclick = async () => {

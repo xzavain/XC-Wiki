@@ -4,6 +4,18 @@ A knowledge base / wiki website system: a public reader portal (search, categori
 
 Stack: **Node 22 + Express + better-sqlite3**, vanilla JS SPA. No build step — clone, `npm install`, `npm start`.
 
+## What's new in 1.2.5
+
+- **Admin → "Users" is now "Staff", grouped like Customers** — the page lists an **Admins** section first, then **Staff** (editors and viewers), each with its own count and the same row actions as before (edit, role, enable/disable, delete, services and groups). Only the labels changed — nothing about accounts, roles, or permissions moved.
+- **Reorder articles inside a category** — Admin → Articles shows articles grouped by category; within each group, drag a row by its ⠿ handle or use the ↑ ↓ buttons and the new order saves immediately and is the order readers see on the category page. New articles join the end of their category, and moving an article to another category puts it at the end there. Pinned and featured articles keep their badges but follow the manual order on category pages (search and the homepage are unchanged).
+- **Article images fit the screen** — images in articles now scale to the width available and keep their shape, even when the stored content carries fixed pixel sizes. On phones, pictures that were floated beside text stack full-width instead of squeezing everything sideways. Wide tables and code blocks still scroll sideways as before.
+- **Staff sign-in sticks** — going from Admin to the public site and back no longer asks staff to sign in again: if you're already signed in as staff, the Admin link takes you straight to the dashboard, and a staff sign-in now lasts the full session (30 days), matching the sign-in cookie. Signing out still signs you out everywhere, and Preview as Customer never touches your staff session.
+- **Articles can belong to several services** — the article editor now ticks services instead of picking just one. The article appears under every ticked service, its page shows a chip for each, and "Recommended for You" counts an article when *any* of its services is one of yours. Existing articles keep the service they already had.
+- **Service pickers show names in boxes** — everywhere Admin attaches services to a person (customer editor, staff editor, invites, and the article editor), each service is now a box labeled with its name: ticked boxes are highlighted, unticked ones plain, so what's assigned is obvious at a glance.
+- **The Services page is display-only** — service boxes no longer click through to per-service pages; the page simply shows the catalog. (Admin service management is unchanged.)
+- **Editor: pick the quote color after you quote** — the Quote button inserts a plain quote and opens a style chooser (Default / Info / Success / Warning / Danger); clicking into any existing quote reopens the chooser for that quote, and hand-styled quotes from code editing convert to the chosen style when you pick one. Also new in the toolbar: **Justify** alignment and an **Anchor** button.
+- **Anchors for article sections** — every heading in a published article automatically gets a link anchor from its text, so `/article/<slug>#<section>` lands right on that section (the page scrolls there, clear of the header). In the editor, the ⚓ Anchor button sets a custom anchor name on the heading or block you're in; links may point at `#anchor` directly.
+
 ## What's new in 1.2.4
 
 - **The homepage "Your Services" section is gone** — the middle-of-the-page list of the viewer's attached services has been removed. The All Services page, the services catalog, and attaching services to users in Admin are all unchanged.

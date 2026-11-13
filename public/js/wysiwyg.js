@@ -31,11 +31,12 @@ function createWysiwyg(mount, opts = {}) {
         <div class="wt-group">
           <button data-cmd="insertUnorderedList" title="Bullet list">•☰</button>
           <button data-cmd="insertOrderedList" title="Numbered list">1.☰</button>
-          <button data-block="blockquote" title="Quote">❝</button>
+          <button data-act="quote" title="Quote — inserts a quote, then pick its style below">❝</button>
           <button data-block="pre" title="Code block">{ }</button>
         </div>
         <div class="wt-group">
           <button data-act="link" title="Insert link">🔗</button>
+          <button data-act="anchor" title="Anchor — set a link target (#name) on this heading or block">⚓</button>
           <button data-act="image" title="Insert image">🖼️</button>
           <button data-act="video" title="Insert video">🎬</button>
           <button data-act="file" title="Insert file link">📎</button>
@@ -46,6 +47,7 @@ function createWysiwyg(mount, opts = {}) {
           <button data-cmd="justifyLeft" title="Align left">⇤</button>
           <button data-cmd="justifyCenter" title="Align center">⇔</button>
           <button data-cmd="justifyRight" title="Align right">⇥</button>
+          <button data-cmd="justifyFull" title="Justify">☰</button>
         </div>
         <div class="wt-group">
           <label class="wt-color" title="Text color">A<input type="color" data-color="foreColor"></label>
@@ -57,6 +59,7 @@ function createWysiwyg(mount, opts = {}) {
           <button data-cmd="removeFormat" title="Clear formatting">🧹</button>
         </div>
       </div>
+      <div class="wysi-bqbar" data-role="bqbar"><span class="bq-label">Quote style:</span><button type="button" class="bq-swatch" data-bq="bq-default">Default</button><button type="button" class="bq-swatch" data-bq="bq-info">Info</button><button type="button" class="bq-swatch" data-bq="bq-success">Success</button><button type="button" class="bq-swatch" data-bq="bq-warning">Warning</button><button type="button" class="bq-swatch" data-bq="bq-danger">Danger</button></div>
       <div class="wysi-pane" data-pane="write"><div class="wysi-edit" contenteditable="true" spellcheck="true"></div></div>
       <div class="wysi-pane hidden" data-pane="html">
         <div class="html-wrap">
@@ -73,6 +76,7 @@ function createWysiwyg(mount, opts = {}) {
   const htmlHl = mount.querySelector('.html-hl code');
   const htmlWrap = mount.querySelector('.html-wrap');
   const preview = mount.querySelector('.wysi-preview');
+  const bqbar = mount.querySelector('[data-role="bqbar"]');
   const wordsEl = mount.querySelector('[data-role="words"]');
   let currentTab = 'write';
 
@@ -98,6 +102,7 @@ function createWysiwyg(mount, opts = {}) {
     mount.querySelectorAll('.wysi-tabs .wt').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
     mount.querySelectorAll('.wysi-pane').forEach(p => p.classList.toggle('hidden', p.dataset.pane !== name));
     mount.querySelector('.wysi-toolbar').style.display = name === 'write' ? '' : 'none';
+    if (name !== 'write') bqbar.classList.remove('open');
     if (name === 'preview') toPreviewTab();
     if (name === 'write') edit.focus();
   }
@@ -131,11 +136,73 @@ function createWysiwyg(mount, opts = {}) {
     inp.addEventListener('click', (e) => e.stopPropagation());
   });
 
+  // ---- Blockquote style chooser (v1.2.5) ----
+  // Flow: inserting a quote creates a PLAIN blockquote (the neutral Default
+  // look) and then OPENS this chooser — the author picks the style for that
+  // quote; the insert path never applies a color by itself. Clicking into any
+  // existing quote reopens the chooser targeted at that quote.
+  const BQ_CLASSES = ['bq-default', 'bq-info', 'bq-success', 'bq-warning', 'bq-danger'];
+  let bqTarget = null;
+  function caretBlockquote() {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount) return null;
+    let n = sel.anchorNode;
+    if (n && n.nodeType === 3) n = n.parentElement;
+    if (!n || !n.closest || !edit.contains(n)) return null;
+    return n.closest('blockquote');
+  }
+  function showBqBar(bq) {
+    bqTarget = bq || null;
+    bqbar.classList.toggle('open', !!bq);
+    if (bq) {
+      const cur = BQ_CLASSES.find(c => bq.classList.contains(c)) || 'bq-default';
+      bqbar.querySelectorAll('[data-bq]').forEach(s => s.classList.toggle('active', s.dataset.bq === cur));
+    }
+  }
+  function applyBqStyle(cls) {
+    if (!bqTarget) return;
+    bqTarget.classList.remove(...BQ_CLASSES);
+    bqTarget.classList.add(cls);
+    // Legacy quotes styled by hand (inline styles from code editing) are
+    // normalized to the class system: drop the inline properties classes own.
+    ['border-left-color', 'border-color', 'background', 'background-color', 'color'].forEach(p => bqTarget.style.removeProperty(p));
+    showBqBar(bqTarget);
+  }
+  bqbar.querySelectorAll('[data-bq]').forEach(s => {
+    s.addEventListener('mousedown', (e) => e.preventDefault()); // keep the caret (and target) in the quote
+    s.onclick = () => applyBqStyle(s.dataset.bq);
+  });
+  function insertBlockquote() {
+    const existing = caretBlockquote();
+    if (existing) { showBqBar(existing); return; }
+    block('blockquote'); // plain quote, no style class — the chooser decides
+    showBqBar(caretBlockquote());
+  }
+  edit.addEventListener('click', () => showBqBar(caretBlockquote()));
+  edit.addEventListener('keyup', () => showBqBar(caretBlockquote()));
+  edit.addEventListener('mouseup', () => showBqBar(caretBlockquote()));
+
   mount.querySelectorAll('[data-act]').forEach(b => b.onclick = (e) => {
     e.preventDefault();
     const act = b.dataset.act;
-    if (act === 'link') {
-      const url = prompt('Link URL (https://…):', 'https://');
+    if (act === 'quote') {
+      insertBlockquote();
+    } else if (act === 'anchor') {
+      // Anchor (v1.2.5): set/edit the id of the heading or block the caret is
+      // in, so links can jump straight to it (#name). Prefilled with a slug
+      // of the block's text; headings also get one automatically at render.
+      const sel = window.getSelection();
+      let n = sel && sel.rangeCount ? sel.anchorNode : null;
+      if (n && n.nodeType === 3) n = n.parentElement;
+      const el = (n && n.closest && edit.contains(n)) ? n.closest('h1,h2,h3,h4,h5,h6,p,li,blockquote,pre') : null;
+      if (!el || el === edit) { alert('Click inside a heading or paragraph first, then set its anchor.'); return; }
+      const slug = (el.textContent || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+      const name = prompt('Anchor name for this block — other articles link to it as #name. Leave blank to remove:', el.id || slug);
+      if (name === null) return;
+      const clean = name.trim().toLowerCase().replace(/[^a-z0-9-_]+/g, '-').replace(/^-+|-+$/g, '');
+      if (clean) el.id = clean; else el.removeAttribute('id');
+    } else if (act === 'link') {
+      const url = prompt('Link URL (https://…, or #anchor for a section of an article):', 'https://');
       if (url) exec('createLink', url);
     } else if (act === 'image' || act === 'video' || act === 'file') {
       if (opts.onInsertMedia) {

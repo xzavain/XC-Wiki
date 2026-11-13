@@ -350,9 +350,11 @@ function closeModal() { document.getElementById('modal-root').innerHTML = ''; }
 function artRow(a) {
   const lock = a.restricted ? ' <span class="lock" title="Restricted article">🔒</span>' : '';
   const edit = canStaffEdit() ? `<a class="staff-edit staff-edit-inline" href="/admin/article/${a.id}" title="Edit this article">✏️ Edit</a>` : '';
+  /* v1.2.5: articles can belong to several services — list them all. */
+  const svcText = (a.services && a.services.length) ? a.services.map(s => s.name).join(' · ') : (a.service ? a.service.name : '');
   return `<div class="art-row">
     <a class="t" href="/article/${esc(a.slug)}">${esc(a.title)}${lock}</a>${edit}
-    <div class="meta">${a.category ? esc(a.category.name) + ' · ' : ''}${a.service ? esc(a.service.name) + ' · ' : ''}${a.reading_time_min} min${a.updated_at ? ' · ' + timeAgo(a.updated_at) : ''}</div>
+    <div class="meta">${a.category ? esc(a.category.name) + ' · ' : ''}${svcText ? esc(svcText) + ' · ' : ''}${a.reading_time_min} min${a.updated_at ? ' · ' + timeAgo(a.updated_at) : ''}</div>
   </div>`;
 }
 
@@ -548,7 +550,7 @@ async function viewArticle(slug) {
         <div class="article-meta">
           <span>👁 ${d.views} views</span><span>⏱ ${d.reading_time_min} min read</span>
           ${d.category ? `<span>${(d.category.cover_image || d.category.icon_image) ? `<img src="${esc(d.category.cover_image || d.category.icon_image)}" alt="" style="width:16px;height:16px;object-fit:cover;border-radius:4px;vertical-align:-3px">` : esc(d.category.icon)} ${esc(d.category.name)}</span>` : ''}
-          ${d.service ? `<span>${esc(d.service.icon)} ${esc(d.service.name)}</span>` : ''}
+          ${(d.services && d.services.length ? d.services : (d.service ? [d.service] : [])).map(sv => `<span>${esc(sv.icon)} ${esc(sv.name)}</span>`).join('')}
           ${d.author_name ? `<span>✍ ${esc(d.author_name)}</span>` : ''}
           <span>Updated ${timeAgo(d.updated_at)}</span>
         </div>
@@ -616,6 +618,16 @@ async function viewArticle(slug) {
     const t = document.getElementById(a.getAttribute('href').slice(1));
     if (t) window.scrollTo({ top: t.getBoundingClientRect().top + window.scrollY - 110, behavior: 'smooth' });
   }));
+  /* Deep link: /article/<slug>#<heading-anchor> — the content renders
+     after page load, so the browser's own hash jump fires too early;
+     scroll to the anchor now that it exists (same header offset as
+     the TOC links). Author-set anchors and auto heading slugs both
+     resolve here, since addHeadingIds guarantees every heading an id. */
+  if (location.hash && location.hash.length > 1) {
+    let target = null;
+    try { target = document.getElementById(decodeURIComponent(location.hash.slice(1))); } catch { target = null; }
+    if (target) window.scrollTo({ top: target.getBoundingClientRect().top + window.scrollY - 110, behavior: 'smooth' });
+  }
 }
 
 async function viewTaxonomyList(kind) {
@@ -625,12 +637,24 @@ async function viewTaxonomyList(kind) {
   app.innerHTML = `<div class="crumbs"><a href="/">Home</a> › ${titles[kind]}</div>
     <h1 style="margin-top:6px">${titles[kind]}</h1>
     <div class="cat-grid">
-    ${d.map(x => `
-      <a class="cat-card" href="/${kind === 'categories' ? 'category' : kind === 'services' ? 'service' : 'tag'}/${esc(x.slug)}">
+    ${d.map(x => {
+      const inner = `
         ${kind === 'categories' ? catCardVisual(x) : `<span class="ci" style="background:${esc(x.color || '#3B82F6')}22;color:${esc(x.color || '#3B82F6')}">${esc(x.icon || '🏷️')}</span>`}
-        <strong>${esc(x.name)}</strong><small>${esc(x.description || '')}${x.article_count !== undefined ? ` · ${x.article_count} articles` : ''}</small>
+        <strong>${esc(x.name)}</strong><small>${esc(x.description || '')}${x.article_count !== undefined ? ` · ${x.article_count} articles` : ''}</small>`;
+      /* v1.2.5: service boxes are DISPLAY-ONLY for everyone — the
+         /services page is a showcase of the boxes themselves, not a
+         doorway to per-service article pages (Adam: "these need to be
+         boxes like is displayed that do not go to any additional
+         page"). Same card visuals, rendered as a plain <div>: no
+         anchor, no arrow, no click target. Categories and tags keep
+         their links. */
+      if (kind === 'services') return `<div class="cat-card svc-box">${inner}</div>`;
+      return `
+      <a class="cat-card" href="/${kind === 'categories' ? 'category' : 'tag'}/${esc(x.slug)}">
+        ${inner}
         ${kind === 'categories' && canStaffEdit() ? catEditPill(x) : '<span class="arr">→</span>'}
-      </a>`).join('')}
+      </a>`;
+    }).join('')}
     </div>`;
   wireStaffEdits(app);
 }
@@ -708,6 +732,13 @@ async function viewSetup() {
 
 async function viewLogin() {
   const app = document.getElementById('app');
+  /* Already signed in as staff? The public site's "Admin" link lands
+     here — a live staff session goes straight to the dashboard instead
+     of being shown a sign-in form it doesn't need (v1.2.5 session fix;
+     the customer login page has always bounced its own users onward
+     the same way). A signed-in CUSTOMER still sees the form: signing
+     in as staff is legitimate from there. */
+  if (App.user && App.user.kind === 'staff') { navigate('/admin', { replace: true }); return; }
   /* First run: no staff account exists yet, so the staff login page IS the
      setup page — the installer creates the administrator account here. */
   let needed = App.setupNeeded;

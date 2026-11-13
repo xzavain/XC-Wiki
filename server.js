@@ -16,6 +16,7 @@ const {
   normalizeColor, getCustomerGroupIds, getCustomerGroups, getCustomerServices,
   setCustomerGroups, setCustomerServices, applyServiceGroups, applyServiceGroupsToHolders,
   getUserServiceIds, getUserServices, setUserServices,
+  getArticleServiceIds, setArticleServices,
   syncLegacyGroupId,
 } = require('./lib/db');
 const { hashPassword, verifyPassword, newToken, expiryFor } = require('./lib/auth');
@@ -35,15 +36,22 @@ function plainText(html) {
   return String(html || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-/* Add id anchors to headings for the table of contents. */
+/* Add id anchors to headings for the table of contents and for
+   #anchor deep links. Headings that already carry an id keep it
+   verbatim (an author-set anchor always wins); those ids are seeded
+   into the used-set FIRST so a generated slug can never collide with
+   a custom anchor elsewhere in the same article. Duplicated heading
+   texts get -2, -3, … suffixes. */
 function addHeadingIds(html) {
   const used = new Set();
+  for (const m of String(html || '').matchAll(/<h[1-6][^>]*\sid="([^"]+)"/gi)) used.add(m[1]);
   return html.replace(/<(h[1-6])([^>]*)>([\s\S]*?)<\/\1>/g, (m, tag, attrs, inner) => {
-    if (/id=/.test(attrs)) return m;
+    if (/\sid=/.test(attrs)) return m;
     const text = inner.replace(/<[^>]+>/g, '');
-    let id = slugify(text) || 'section';
+    const base = slugify(text) || 'section';
+    let id = base;
     let n = 2;
-    while (used.has(id)) id = `${slugify(text)}-${n++}`;
+    while (used.has(id)) id = `${base}-${n++}`;
     used.add(id);
     return `<${tag}${attrs} id="${id}">${inner}</${tag}>`;
   });
@@ -378,7 +386,7 @@ app.post('/api/setup', (req, res) => {
     .run(String(email).trim().toLowerCase(), hashPassword(password), String(display_name || 'Admin').slice(0, 80), 'admin', now).lastInsertRowid;
   const token = newToken();
   db.prepare('INSERT INTO auth_tokens (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)')
-    .run(token, id, Date.now(), expiryFor(false));
+    .run(token, id, Date.now(), expiryFor(true));
   logActivity(db, id, 'setup', 'First admin account created');
   setSessionCookie(req, res, token);
   res.json({ token, user: { id, email: String(email).trim().toLowerCase(), display_name: String(display_name || 'Admin'), role: 'admin', kind: 'staff' } });
@@ -393,8 +401,14 @@ app.post('/api/auth/login', (req, res) => {
   }
   cleanExpiredTokens(db);
   const token = newToken();
+  /* Staff sessions live 30 days — the same span the session cookie
+     already advertises. The old 12-hour token meant an admin who
+     signed in, browsed the public site, and came back to the admin
+     dashboard later the same day (or the next morning) was forced to
+     sign in again (v1.2.5 session fix). Customer sessions keep the
+     shorter lifetime. */
   db.prepare('INSERT INTO auth_tokens (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)')
-    .run(token, user.id, Date.now(), expiryFor(false));
+    .run(token, user.id, Date.now(), expiryFor(true));
   logActivity(db, user.id, 'login', `${user.email} signed in`);
   setSessionCookie(req, res, token);
   res.json({ token, user: { id: user.id, email: user.email, display_name: user.display_name, role: user.role, kind: 'staff' } });
@@ -536,10 +550,22 @@ function withHexColor(row) {
 }
 
 function articleCard(row) {
+  /* v1.2.5: an article can belong to several services (article_services
+     join). Cards carry the full list in `services`; `service` remains
+     the first attached service for single-service readers. Rows fetched
+     without the services_json column fall back to the legacy join. */
+  let services = [];
+  if (row.services_json) {
+    try { services = JSON.parse(row.services_json) || []; } catch { services = []; }
+  }
+  if (!services.length && row.service_name) {
+    services = [{ id: row.service_id, name: row.service_name, slug: row.service_slug, icon: row.service_icon }];
+  }
   return {
     id: row.id, title: row.title, slug: row.slug, excerpt: row.excerpt,
     category: row.category_name ? { name: row.category_name, slug: row.category_slug, icon: row.category_icon, icon_image: row.category_icon_image || '', cover_image: row.category_cover_image || '', color: row.category_color } : null,
-    service: row.service_name ? { name: row.service_name, slug: row.service_slug, icon: row.service_icon } : null,
+    service: services.length ? services[0] : (row.service_name ? { name: row.service_name, slug: row.service_slug, icon: row.service_icon } : null),
+    services,
     views: row.views, helpful_yes: row.helpful_yes, helpful_no: row.helpful_no,
     reading_time_min: row.reading_time_min, featured: !!row.featured, pinned: !!row.pinned,
     visibility: row.visibility || 'all',
@@ -552,7 +578,11 @@ const ARTICLE_JOIN = `
   LEFT JOIN categories c ON c.id = a.category_id
   LEFT JOIN services s ON s.id = a.service_id`;
 const ARTICLE_COLS = `a.*, c.name AS category_name, c.slug AS category_slug, c.icon AS category_icon, c.icon_image AS category_icon_image, c.cover_image AS category_cover_image, c.color AS category_color,
-  s.name AS service_name, s.slug AS service_slug, s.icon AS service_icon`;
+  s.name AS service_name, s.slug AS service_slug, s.icon AS service_icon,
+  (SELECT json_group_array(json_object('id', sv.id, 'name', sv.name, 'slug', sv.slug, 'icon', sv.icon))
+     FROM (SELECT s2.id, s2.name, s2.slug, s2.icon FROM article_services asv
+           JOIN services s2 ON s2.id = asv.service_id
+           WHERE asv.article_id = a.id ORDER BY s2.name) sv) AS services_json`;
 
 /** The signed-in viewer's OWN services: customers read their
     customer_services assignments, staff read user_services attachments.
@@ -604,8 +634,10 @@ function recommendedArticles(db, viewer, anonKey, vis, featuredCards) {
     return 1;                                               // in progress
   };
   const svcIds = mine.map(s => s.id);
+  /* v1.2.5: match on the article_services join — an article counts when
+     ANY of its services is one of the viewer's own. */
   const rows = db.prepare(`SELECT ${ARTICLE_COLS} FROM articles a ${ARTICLE_JOIN}
-    WHERE a.status = 'published' AND ${vis.clause} AND a.service_id IN (${svcIds.map(() => '?').join(',')})
+    WHERE a.status = 'published' AND ${vis.clause} AND EXISTS (SELECT 1 FROM article_services asv WHERE asv.article_id = a.id AND asv.service_id IN (${svcIds.map(() => '?').join(',')}))
     ORDER BY a.updated_at DESC, a.id DESC`).all(...vis.params, ...svcIds);
   const picked = [];
   const seen = new Set();
@@ -682,8 +714,8 @@ app.get('/api/articles/:slug', requireSignedIn, (req, res) => {
   const tags = db.prepare('SELECT t.name, t.slug FROM tags t JOIN article_tags at ON at.tag_id = t.id WHERE at.article_id = ? ORDER BY t.name').all(a.id);
   const related = db.prepare(`SELECT ${ARTICLE_COLS} FROM articles a ${ARTICLE_JOIN}
     WHERE a.status = 'published' AND ${vis.clause} AND a.id != ?
-      AND (a.category_id = ? OR a.service_id = ? OR a.id IN (SELECT article_id FROM article_tags WHERE tag_id IN (SELECT tag_id FROM article_tags WHERE article_id = ?)))
-    ORDER BY a.views DESC LIMIT 4`).all(...vis.params, a.id, a.category_id, a.service_id, a.id).map(articleCard);
+      AND (a.category_id = ? OR EXISTS (SELECT 1 FROM article_services asv WHERE asv.article_id = a.id AND asv.service_id IN (SELECT service_id FROM article_services WHERE article_id = ?)) OR a.id IN (SELECT article_id FROM article_tags WHERE tag_id IN (SELECT tag_id FROM article_tags WHERE article_id = ?)))
+    ORDER BY a.views DESC LIMIT 4`).all(...vis.params, a.id, a.category_id, a.id, a.id).map(articleCard);
   const prev = db.prepare(`SELECT a.id, a.title, a.slug FROM articles a ${ARTICLE_JOIN}
     WHERE a.status = 'published' AND ${vis.clause} AND a.published_at < ? ORDER BY a.published_at DESC LIMIT 1`).get(...vis.params, a.published_at);
   const next = db.prepare(`SELECT a.id, a.title, a.slug FROM articles a ${ARTICLE_JOIN}
@@ -785,8 +817,12 @@ app.get('/api/categories/:slug', requireSignedIn, (req, res) => {
   if (!cat) return res.status(404).json({ error: 'Not found' });
   withHexColor(cat);
   const vis = visibilityClause(req.viewer);
+  /* v1.2.5: the stored per-category order (articles.sort_order) governs
+     this list — pinned/featured keep their badges but no longer float
+     above the manual order here. updated_at is only a tie-break for
+     rows whose stored values are still equal (pre-backfill data). */
   const articles = db.prepare(`SELECT ${ARTICLE_COLS} FROM articles a ${ARTICLE_JOIN}
-    WHERE a.status = 'published' AND ${vis.clause} AND a.category_id = ? ORDER BY a.pinned DESC, a.updated_at DESC`).all(...vis.params, cat.id).map(articleCard);
+    WHERE a.status = 'published' AND ${vis.clause} AND a.category_id = ? ORDER BY a.sort_order ASC, a.updated_at DESC`).all(...vis.params, cat.id).map(articleCard);
   res.json({ category: cat, articles });
 });
 
@@ -800,8 +836,10 @@ app.get('/api/services/:slug', requireSignedIn, (req, res) => {
   if (!svc) return res.status(404).json({ error: 'Not found' });
   withHexColor(svc);
   const vis = visibilityClause(req.viewer);
+  /* v1.2.5: per-service lists read the article_services join — an
+     article tied to several services appears under each of them. */
   const articles = db.prepare(`SELECT ${ARTICLE_COLS} FROM articles a ${ARTICLE_JOIN}
-    WHERE a.status = 'published' AND ${vis.clause} AND a.service_id = ? ORDER BY a.pinned DESC, a.updated_at DESC`).all(...vis.params, svc.id).map(articleCard);
+    WHERE a.status = 'published' AND ${vis.clause} AND EXISTS (SELECT 1 FROM article_services asv WHERE asv.article_id = a.id AND asv.service_id = ?) ORDER BY a.pinned DESC, a.updated_at DESC`).all(...vis.params, svc.id).map(articleCard);
   res.json({ service: svc, articles });
 });
 
@@ -918,11 +956,14 @@ app.get('/api/admin/articles', requireAuth, (req, res) => {
   const params = [];
   if (status) { conds.push('a.status = ?'); params.push(status); }
   if (category_id) { conds.push('a.category_id = ?'); params.push(Number(category_id)); }
-  if (service_id) { conds.push('a.service_id = ?'); params.push(Number(service_id)); }
+  if (service_id) { conds.push('EXISTS (SELECT 1 FROM article_services asv WHERE asv.article_id = a.id AND asv.service_id = ?)'); params.push(Number(service_id)); }
   if (visibility) { conds.push('a.visibility = ?'); params.push(visibility); }
   if (q) { conds.push('(a.title LIKE ? OR a.slug LIKE ?)'); params.push(`%${q}%`, `%${q}%`); }
   const where = conds.length ? 'WHERE ' + conds.join(' AND ') : '';
-  const rows = db.prepare(`SELECT ${ARTICLE_COLS} FROM articles a ${ARTICLE_JOIN} ${where} ORDER BY a.updated_at DESC LIMIT 500`).all(...params);
+  /* v1.2.5: rows come back in the stored per-category order so the
+     grouped admin view shows (and edits) the manual order; the client
+     re-buckets rows into the front-end category sequence itself. */
+  const rows = db.prepare(`SELECT ${ARTICLE_COLS} FROM articles a ${ARTICLE_JOIN} ${where} ORDER BY a.category_id, a.sort_order, a.updated_at DESC LIMIT 500`).all(...params);
   const groupMap = {};
   for (const r of db.prepare(`SELECT ag.article_id, g.id, g.name, g.color FROM article_groups ag
     JOIN customer_groups g ON g.id = ag.group_id ORDER BY g.name`).all()) {
@@ -937,7 +978,64 @@ app.get('/api/admin/articles/:id', requireAuth, (req, res) => {
   if (!a) return res.status(404).json({ error: 'Not found' });
   const tags = db.prepare('SELECT t.name FROM tags t JOIN article_tags at ON at.tag_id = t.id WHERE at.article_id = ?').all(a.id).map(t => t.name);
   const group_ids = db.prepare('SELECT group_id FROM article_groups WHERE article_id = ?').all(a.id).map(r => r.group_id);
-  res.json({ ...a, tags, group_ids });
+  const service_ids = getArticleServiceIds(db, a.id);
+  res.json({ ...a, tags, group_ids, service_ids });
+});
+
+/** The next sort_order at the END of a category bucket (v1.2.5 manual
+    article order). categoryId null is the Uncategorized bucket. */
+function nextArticleSortOrder(db, categoryId) {
+  const row = categoryId === null || categoryId === undefined
+    ? db.prepare('SELECT MAX(sort_order) AS m FROM articles WHERE category_id IS NULL').get()
+    : db.prepare('SELECT MAX(sort_order) AS m FROM articles WHERE category_id = ?').get(categoryId);
+  return (Number.isFinite(row.m) ? row.m : 0) + 10;
+}
+
+/** The service set a create/update payload asks for: the multi-select
+    service_ids array wins; a legacy single service_id is honored when
+    no array is sent. Returns null when the payload doesn't mention
+    services at all (leave the article's set untouched). */
+function payloadServiceIds(b) {
+  if (Array.isArray(b.service_ids)) return b.service_ids;
+  if (b.service_id !== undefined) return b.service_id ? [b.service_id] : [];
+  return null;
+}
+
+/* Set the article order within ONE category (v1.2.5), mirroring the
+   categories order endpoint: the client sends { category_id, ids }
+   with the bucket's ids in the wanted order (category_id null =
+   Uncategorized); articles in the bucket that are not listed keep
+   their current relative order after the listed ones, so a stale
+   client can never drop an article from the order. Every id must
+   exist AND belong to the bucket. Renumbers 10, 20, 30… in a single
+   transaction. Registered BEFORE PUT /api/admin/articles/:id so the
+   literal path is not swallowed by the :id route. */
+app.put('/api/admin/articles/order', requireAuth, (req, res) => {
+  const db = getDb();
+  const b = req.body || {};
+  const categoryId = b.category_id === undefined ? null : b.category_id;
+  if (categoryId !== null && (!Number.isInteger(Number(categoryId)) || Number(categoryId) <= 0)) {
+    return res.status(400).json({ error: 'category_id must be a positive integer or null' });
+  }
+  const catId = categoryId === null ? null : Number(categoryId);
+  if (catId !== null && !db.prepare('SELECT id FROM categories WHERE id = ?').get(catId)) {
+    return res.status(400).json({ error: 'Unknown category' });
+  }
+  const raw = b.ids;
+  if (!Array.isArray(raw) || !raw.length) return res.status(400).json({ error: 'A non-empty ordered list of article ids is required' });
+  const ids = raw.map(Number);
+  if (ids.some(n => !Number.isInteger(n) || n <= 0)) return res.status(400).json({ error: 'Article ids must be positive integers' });
+  if (new Set(ids).size !== ids.length) return res.status(400).json({ error: 'Duplicate article ids' });
+  const bucket = catId === null
+    ? db.prepare('SELECT id FROM articles WHERE category_id IS NULL ORDER BY sort_order, updated_at DESC').all()
+    : db.prepare('SELECT id FROM articles WHERE category_id = ? ORDER BY sort_order, updated_at DESC').all(catId);
+  const inBucket = new Set(bucket.map(r => r.id));
+  if (ids.some(id => !inBucket.has(id))) return res.status(400).json({ error: 'Every article id must belong to the given category' });
+  const finalOrder = [...ids, ...bucket.map(r => r.id).filter(id => !ids.includes(id))];
+  const upd = db.prepare('UPDATE articles SET sort_order = ? WHERE id = ?');
+  db.transaction(() => { finalOrder.forEach((id, i) => upd.run((i + 1) * 10, id)); })();
+  logActivity(db, req.user.id, 'articles_reorder', `Reordered articles in category ${catId === null ? '(uncategorized)' : '#' + catId} (${finalOrder.length})`);
+  res.json({ ok: true, order: finalOrder });
 });
 
 app.post('/api/admin/articles', requireAuth, (req, res) => {
@@ -956,19 +1054,23 @@ app.post('/api/admin/articles', requireAuth, (req, res) => {
   const visibility = sanitizeVisibility(b.visibility);
   const gErr = groupPublishError(visibility, status, visibility === 'groups' ? (b.group_ids || []) : []);
   if (gErr) return res.status(400).json({ error: gErr });
+  const svcIds = payloadServiceIds(b) || [];
   const id = db.prepare(`INSERT INTO articles
     (title, slug, content_html, content_text, excerpt, category_id, service_id, status, featured, pinned, visibility, author_id,
-     reading_time_min, published_at, scheduled_at, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+     reading_time_min, published_at, scheduled_at, created_at, updated_at, sort_order)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(
       String(b.title).trim(), slug, content, plainText(content), makeExcerpt(content),
-      b.category_id || null, b.service_id || null, status,
+      b.category_id || null, svcIds.length ? (Number(svcIds[0]) || null) : null, status,
       b.featured ? 1 : 0, b.pinned ? 1 : 0, visibility, req.user.id,
       readingTimeMin(content),
       status === 'published' ? now : '',
       status === 'scheduled' ? String(b.scheduled_at || '') : '',
-      now, now
+      now, now,
+      /* v1.2.5: a new article appends at the end of its category */
+      nextArticleSortOrder(db, b.category_id || null)
     ).lastInsertRowid;
+  setArticleServices(db, id, svcIds);
   syncArticleTags(db, id, b.tags);
   syncArticleGroups(db, id, visibility === 'groups' ? b.group_ids : []);
   saveArticleVersion(db, id, String(b.title).trim(), content, req.user.id, 'Created');
@@ -1003,12 +1105,17 @@ app.put('/api/admin/articles/:id', requireAuth, (req, res) => {
   const gErr = groupPublishError(visibility, status, visibility === 'groups' ? finalGroupIds : []);
   if (gErr) return res.status(400).json({ error: gErr });
   const published_at = (status === 'published' && !cur.published_at) ? now : cur.published_at;
+  /* v1.2.5: moving an article to a different category appends it at
+     the end of the new category's order; staying put keeps its place. */
+  const newCategoryId = b.category_id !== undefined ? (b.category_id ? Number(b.category_id) : null) : cur.category_id;
+  const sortOrder = newCategoryId !== cur.category_id ? nextArticleSortOrder(db, newCategoryId) : cur.sort_order;
+  const svcIds = payloadServiceIds(b);
   db.prepare(`UPDATE articles SET title = ?, slug = ?, content_html = ?, content_text = ?, excerpt = ?, category_id = ?, service_id = ?,
-    status = ?, featured = ?, pinned = ?, visibility = ?, reading_time_min = ?, published_at = ?, scheduled_at = ?, updated_at = ? WHERE id = ?`)
+    status = ?, featured = ?, pinned = ?, visibility = ?, reading_time_min = ?, published_at = ?, scheduled_at = ?, updated_at = ?, sort_order = ? WHERE id = ?`)
     .run(
       title, slug, content, plainText(content), makeExcerpt(content),
-      b.category_id !== undefined ? (b.category_id || null) : cur.category_id,
-      b.service_id !== undefined ? (b.service_id || null) : cur.service_id,
+      newCategoryId,
+      svcIds !== null ? (svcIds.length ? (Number(svcIds[0]) || null) : null) : cur.service_id,
       status,
       b.featured !== undefined ? (b.featured ? 1 : 0) : cur.featured,
       b.pinned !== undefined ? (b.pinned ? 1 : 0) : cur.pinned,
@@ -1016,8 +1123,9 @@ app.put('/api/admin/articles/:id', requireAuth, (req, res) => {
       readingTimeMin(content),
       published_at,
       status === 'scheduled' ? String(b.scheduled_at || cur.scheduled_at || '') : '',
-      now, cur.id
+      now, sortOrder, cur.id
     );
+  if (svcIds !== null) setArticleServices(db, cur.id, svcIds);
   if (b.tags !== undefined) syncArticleTags(db, cur.id, b.tags);
   if (b.group_ids !== undefined || b.visibility !== undefined) {
     syncArticleGroups(db, cur.id, visibility === 'groups' ? finalGroupIds : []);
@@ -1368,8 +1476,9 @@ app.put('/api/admin/users/:id', requireAuth, requireRole('admin'), (req, res) =>
   res.json({ ok: true });
 });
 app.delete('/api/admin/users/:id', requireAuth, requireRole('admin'), (req, res) => {
+  const db = getDb();
   if (Number(req.params.id) === req.user.id) return res.status(400).json({ error: 'You cannot delete your own account' });
-  getDb().prepare('DELETE FROM users WHERE id = ?').run(req.params.id);
+  db.prepare('DELETE FROM users WHERE id = ?').run(req.params.id);
   logActivity(db, req.user.id, 'user_delete', `Deleted user #${req.params.id}`);
   res.json({ ok: true });
 });

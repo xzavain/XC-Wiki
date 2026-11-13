@@ -4,6 +4,11 @@ A knowledge base / wiki website system: a public reader portal (search, categori
 
 Stack: **Node 22 + Express + better-sqlite3**, vanilla JS SPA. No build step — clone, `npm install`, `npm start`.
 
+## What's new in 1.2.4
+
+- **The homepage "Your Services" section is gone** — the middle-of-the-page list of the viewer's attached services has been removed. The All Services page, the services catalog, and attaching services to users in Admin are all unchanged.
+- **"Recommended for You" is now actually personal** — for a signed-in viewer with services attached, the list leads with guides for *their* services that they haven't read yet, then ones they started but didn't finish; guides already finished no longer take up a slot. If that runs short, the remaining slots fill with the featured guides, as before. Viewers without attached services see exactly what they saw before, and nobody ever sees another viewer's services or reading progress — recommendations are built from the viewer's own account and their own reading state only.
+
 ## What's new in 1.2.3
 
 - **Reorder the homepage categories** — Admin → Categories now shows the categories in homepage order, and staff can change that order right there: drag a row by its ⠿ handle, or use the ↑ ↓ buttons on a row (the reliable way on a tablet). Changes save immediately and the homepage, category listings, and article groups all follow the same stored order. Staff signed in on the homepage can also drag category cards by their handle. New categories are added at the end of the order automatically (a sort-order number can still be typed to place one exactly), and existing sites keep the exact order they show today — the stored values are simply made unambiguous on first boot.

@@ -392,7 +392,7 @@ function wireStaffEdits(root) {
 async function viewHome() {
   const app = document.getElementById('app');
   const s = App.settings;
-  const d = await api('/api/home');
+  const d = await api('/api/home?anon_key=' + encodeURIComponent(anonKey()));
   const pop = s.popular_searches || [];
 
   const cont = await continueReadingCard();
@@ -425,22 +425,11 @@ async function viewHome() {
         </a>`).join('')}
     </div>
 
-    <div class="section">
-      <div class="section-head"><div><h2>Your Services</h2><p class="sub">The services attached to your account.</p></div></div>
-      ${d.services.length ? `<div class="svc-grid">
-        ${d.services.map(svc => `
-          <div class="svc-card">
-            <span class="si" style="background:${esc(svc.color)}22">${esc(svc.icon)}</span>
-            <span class="svc-txt"><strong>${esc(svc.name)}</strong><small>${esc(svc.description)}</small></span>
-          </div>`).join('')}
-      </div>` : '<div class="empty">No services are attached to your account yet.</div>'}
-    </div>
-
     ${cont}
 
     <div class="section">
       <div class="section-head"><div><h2>Recommended for You</h2></div></div>
-      <div class="art-list">${d.featured.map(artRow).join('') || '<div class="empty">No recommendations yet.</div>'}</div>
+      <div class="art-list">${(d.recommended || d.featured).map(artRow).join('') || '<div class="empty">No recommendations yet.</div>'}</div>
     </div>
 
     <div class="section two-col">

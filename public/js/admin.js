@@ -1952,7 +1952,7 @@ const AdminView = {
           <label class="fld"><span>New password ${u ? '(blank = keep)' : ''}</span><input id="u-pass" type="password" placeholder="${u ? '—' : '8+ characters'}"></label>
           <label class="fld"><span>Status</span><select id="u-dis"><option value="0" ${!u?.disabled ? 'selected' : ''}>Active</option><option value="1" ${u?.disabled ? 'selected' : ''}>Disabled</option></select></label>
         </div>
-        <div class="fld"><span>Services <small style="color:var(--muted)">(attached to this user's account — they appear in their homepage "Your Services", display only)</small></span>
+        <div class="fld"><span>Services <small style="color:var(--muted)">(attached to this user's account — they personalize their homepage recommendations)</small></span>
           <span style="display:flex;gap:6px;flex-wrap:wrap">${(this.tax.services || []).map(s => `<label class="chip-pick"><input type="checkbox" class="u-svc" value="${s.id}" ${(u?.services || []).some(x => x.id === s.id) ? 'checked' : ''}> ${esc(s.name)}</label>`).join('') || '<small style="color:var(--muted)">No services yet.</small>'}</span></div>
         <div style="display:flex;gap:8px"><button class="btn small" id="u-save">Save</button><button class="btn ghost small" id="u-cancel">Cancel</button></div></div>`;
       document.getElementById('u-cancel').onclick = () => this.users(main);

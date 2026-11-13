@@ -554,10 +554,11 @@ const ARTICLE_JOIN = `
 const ARTICLE_COLS = `a.*, c.name AS category_name, c.slug AS category_slug, c.icon AS category_icon, c.icon_image AS category_icon_image, c.cover_image AS category_cover_image, c.color AS category_color,
   s.name AS service_name, s.slug AS service_slug, s.icon AS service_icon`;
 
-/** The signed-in viewer's OWN services for the homepage "Your Services"
-    section (display-only since 1.1.5): customers read their
+/** The signed-in viewer's OWN services: customers read their
     customer_services assignments, staff read user_services attachments.
-    Never the whole catalog, never inferred from visible articles. */
+    Never the whole catalog, never inferred from visible articles.
+    (Through 1.2.3 these fed the homepage "Your Services" section; since
+    1.2.4 they drive the personalized "Recommended for You" list.) */
 function viewerOwnServices(db, viewer) {
   if (!viewer || viewer.id == null) return [];
   const join = viewer.type === 'staff'
@@ -567,6 +568,64 @@ function viewerOwnServices(db, viewer) {
     .all(viewer.id).map(withHexColor);
 }
 
+/** "Recommended for You" on the homepage (v1.2.4). For a viewer WITH
+    services attached, recommendations lead with published articles the
+    viewer may see (the normal visibility clause — group rules fully
+    respected) whose service is one of the viewer's own, via
+    articles.service_id — the same association the service pages and the
+    article cards use. Those are ordered by the viewer's own reading
+    state from reading_progress: never-started first, then
+    started-but-unfinished, most recently updated first within a tier;
+    finished articles are excluded entirely. Reading state thresholds
+    match Continue Reading's: >2% counts as started, >=99% counts as
+    finished. Any remaining slots (cap 6, the same as the other home
+    lists) are filled from the featured list — the pre-1.2.4 content of
+    this section — skipping anything finished or already listed. A
+    viewer with NO attached services gets the featured list unchanged.
+    Reading rows are keyed by the browser's anon_key (the key
+    /api/progress uses) and the map is built only from the caller's own
+    key, so one viewer's services or progress never shape another's
+    list. */
+const RECOMMENDED_CAP = 6;
+const PROGRESS_STARTED = 0.02;
+const PROGRESS_FINISHED = 0.99;
+function recommendedArticles(db, viewer, anonKey, vis, featuredCards) {
+  const mine = viewerOwnServices(db, viewer);
+  if (!mine.length) return featuredCards;
+  const progress = new Map();
+  if (anonKey) {
+    const rows = db.prepare('SELECT article_id, progress FROM reading_progress WHERE anon_key = ? AND (user_id IS NULL)').all(anonKey);
+    for (const r of rows) progress.set(r.article_id, r.progress);
+  }
+  const stateOf = (id) => {
+    const p = progress.get(id);
+    if (p === undefined || p <= PROGRESS_STARTED) return 0; // never started
+    if (p >= PROGRESS_FINISHED) return 2;                   // finished
+    return 1;                                               // in progress
+  };
+  const svcIds = mine.map(s => s.id);
+  const rows = db.prepare(`SELECT ${ARTICLE_COLS} FROM articles a ${ARTICLE_JOIN}
+    WHERE a.status = 'published' AND ${vis.clause} AND a.service_id IN (${svcIds.map(() => '?').join(',')})
+    ORDER BY a.updated_at DESC, a.id DESC`).all(...vis.params, ...svcIds);
+  const picked = [];
+  const seen = new Set();
+  for (const tier of [0, 1]) {
+    for (const row of rows) {
+      if (picked.length >= RECOMMENDED_CAP) break;
+      if (seen.has(row.id) || stateOf(row.id) !== tier) continue;
+      seen.add(row.id);
+      picked.push(articleCard(row));
+    }
+  }
+  for (const card of featuredCards) {
+    if (picked.length >= RECOMMENDED_CAP) break;
+    if (seen.has(card.id) || stateOf(card.id) === 2) continue;
+    seen.add(card.id);
+    picked.push(card);
+  }
+  return picked;
+}
+
 app.get('/api/home', requireSignedIn, (req, res) => {
   const db = getDb();
   const pub = `a.status = 'published'`;
@@ -574,11 +633,11 @@ app.get('/api/home', requireSignedIn, (req, res) => {
   const catVis = categoryVisibilityWhere(req.viewer);
   const categories = db.prepare(`SELECT c.*, (SELECT COUNT(*) FROM articles a WHERE a.category_id = c.id AND ${pub} AND ${vis.clause}) AS article_count
     FROM categories c WHERE ${catVis.clause} ORDER BY c.sort_order, c.name`).all(...vis.params, ...catVis.params);
-  const services = viewerOwnServices(db, req.viewer);
   const featured = db.prepare(`SELECT ${ARTICLE_COLS} FROM articles a ${ARTICLE_JOIN} WHERE ${pub} AND ${vis.clause} AND a.featured = 1 ORDER BY a.pinned DESC, a.updated_at DESC LIMIT 6`).all(...vis.params).map(articleCard);
   const recent = db.prepare(`SELECT ${ARTICLE_COLS} FROM articles a ${ARTICLE_JOIN} WHERE ${pub} AND ${vis.clause} ORDER BY a.updated_at DESC LIMIT 6`).all(...vis.params).map(articleCard);
   const popular = db.prepare(`SELECT ${ARTICLE_COLS} FROM articles a ${ARTICLE_JOIN} WHERE ${pub} AND ${vis.clause} ORDER BY a.views DESC LIMIT 6`).all(...vis.params).map(articleCard);
-  res.json({ categories, services, featured, recent, popular });
+  const recommended = recommendedArticles(db, req.viewer, String(req.query.anon_key || '').slice(0, 64), vis, featured);
+  res.json({ categories, featured, recent, popular, recommended });
 });
 
 /* ---------------- Public: articles ---------------- */

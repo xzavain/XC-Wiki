@@ -417,7 +417,8 @@ async function viewHome() {
 
     <div class="cat-grid">
       ${d.categories.map(c => `
-        <a class="cat-card" href="/category/${esc(c.slug)}">
+        <a class="cat-card" href="/category/${esc(c.slug)}"${canStaffEdit() ? ` data-cat-card="${c.id}"` : ''}>
+          ${canStaffEdit() ? `<span class="staff-drag" data-drag-cat="${c.id}" title="Drag to reorder categories">⠿</span>` : ''}
           ${catCardVisual(c)}
           <strong>${esc(c.name)}</strong><small>${esc(c.description)}</small>
           ${canStaffEdit() ? catEditPill(c) : '<span class="arr">→</span>'}
@@ -455,6 +456,65 @@ async function viewHome() {
   document.getElementById('hero-q').onkeydown = (e) => { if (e.key === 'Enter') go(); };
   app.querySelectorAll('.chip[data-q]').forEach(ch => ch.onclick = () => { navigate('/search/' + encodeURIComponent(ch.dataset.q)); });
   wireStaffEdits(app);
+  wireHomeCatDrag(app);
+}
+
+/* Staff-only homepage category reorder (v1.2.3): drag a card by its
+   ⠿ handle to move it; the new order saves through the same admin
+   endpoint the Categories table uses, and the homepage re-renders
+   from the server's canonical order either way. Only wired for
+   signed-in staff — customers and signed-out visitors get exactly
+   the markup they have always had (no handle, no attributes). HTML5
+   drag-and-drop does not fire on touch browsers, so on a tablet the
+   Admin → Categories ↑ ↓ buttons are the way to reorder. */
+function wireHomeCatDrag(root) {
+  if (!canStaffEdit()) return;
+  const grid = (root || document).querySelector('.cat-grid');
+  if (!grid) return;
+  const cards = [...grid.querySelectorAll('[data-cat-card]')];
+  if (cards.length < 2) return;
+  let dragCard = null;
+  const clearMarks = () => cards.forEach(c => c.classList.remove('drop-before', 'drop-after'));
+  for (const card of cards) {
+    const handle = card.querySelector('[data-drag-cat]');
+    if (!handle) continue;
+    handle.addEventListener('mousedown', () => { card.draggable = true; });
+    handle.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
+    card.addEventListener('dragstart', (e) => {
+      dragCard = card;
+      card.classList.add('dragging');
+      try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', card.dataset.catCard); } catch { /* older browser */ }
+    });
+    card.addEventListener('dragend', () => { card.draggable = false; card.classList.remove('dragging'); clearMarks(); dragCard = null; });
+    card.addEventListener('dragover', (e) => {
+      if (!dragCard || dragCard === card) return;
+      e.preventDefault();
+      const rect = card.getBoundingClientRect();
+      const after = (e.clientX - rect.left) > rect.width / 2;
+      clearMarks();
+      card.classList.add(after ? 'drop-after' : 'drop-before');
+      card.dataset.dropAfter = after ? '1' : '';
+    });
+    card.addEventListener('dragleave', () => card.classList.remove('drop-before', 'drop-after'));
+    card.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      if (!dragCard || dragCard === card) return;
+      const movedId = Number(dragCard.dataset.catCard);
+      const targetId = Number(card.dataset.catCard);
+      const after = card.dataset.dropAfter === '1';
+      const ids = cards.map(c => Number(c.dataset.catCard));
+      ids.splice(ids.indexOf(movedId), 1);
+      let to = ids.indexOf(targetId);
+      if (after) to += 1;
+      ids.splice(to, 0, movedId);
+      clearMarks();
+      try {
+        await api('/api/admin/categories/order', { method: 'PUT', body: JSON.stringify({ ids }) });
+        toast('Category order saved', 'ok');
+      } catch (err) { toast(err.message || 'Could not save the category order', 'err'); }
+      viewHome();
+    });
+  }
 }
 
 async function continueReadingCard() {

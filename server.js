@@ -1063,7 +1063,7 @@ app.get('/api/admin/visibility-preview', requireAuth, (req, res) => {
     recent: db.prepare(`SELECT a.title, a.slug FROM articles a ${ARTICLE_JOIN} WHERE a.status='published' AND ${vis.clause} ORDER BY a.updated_at DESC LIMIT 10`).all(...vis.params),
   };
   const catVis = categoryVisibilityWhere(viewer);
-  const categories = db.prepare(`SELECT c.name, c.slug, c.visibility FROM categories c WHERE ${catVis.clause} ORDER BY c.sort_order`).all(...catVis.params);
+  const categories = db.prepare(`SELECT c.name, c.slug, c.visibility FROM categories c WHERE ${catVis.clause} ORDER BY c.sort_order, c.name`).all(...catVis.params);
   const search = searchArticles(db, 'guide', viewer, 10).map(r => ({ title: r.title, slug: r.slug }));
   res.json({ viewer: mode, home, categories, search_sample: search });
 });
@@ -1080,6 +1080,8 @@ function crudRoutes(base, table, fields, hooks = {}) {
     if (f === 'color') return normalizeColor(v);
     // a missing category visibility means the table default ('all'), not ''
     if (f === 'visibility' && (v === '' || v === undefined || v === null)) return 'all';
+    // sort_order is an integer position — never let '' or junk land in it
+    if (f === 'sort_order') { const n = Number(v); return Number.isFinite(n) ? Math.trunc(n) : 0; }
     return v;
   };
   app.get(`/api/admin/${base}`, requireAuth, (req, res) => {
@@ -1092,6 +1094,7 @@ function crudRoutes(base, table, fields, hooks = {}) {
     const db = getDb();
     const b = req.body || {};
     if (!b.name || !String(b.name).trim()) return res.status(400).json({ error: 'Name is required' });
+    if (hooks.beforeCreate) hooks.beforeCreate(db, b);
     const slug = uniqueSlug(db, b.slug || b.name, table);
     const cols = ['name', 'slug', ...fields];
     const vals = [String(b.name).trim(), slug, ...fields.map(f => coerce(f, b[f] ?? ''))];
@@ -1146,7 +1149,40 @@ function setCategoryRestrictions(db, categoryId, table, col, ids, validTable) {
   return wanted;
 }
 
+/* Set the homepage category order in one shot (v1.2.3). Registered
+   BEFORE the categories crudRoutes below so this literal path is not
+   swallowed by PUT /api/admin/categories/:id. Clients (the admin
+   Categories table, or staff drag on the homepage) send the full
+   ordered id list; ids that exist but are not listed keep their
+   current relative order after the listed ones, so a stale client
+   can never drop a category from the order. The stored values are
+   renumbered 10, 20, 30… in a single transaction. */
+app.put('/api/admin/categories/order', requireAuth, (req, res) => {
+  const db = getDb();
+  const raw = req.body && req.body.ids;
+  if (!Array.isArray(raw) || !raw.length) return res.status(400).json({ error: 'A non-empty ordered list of category ids is required' });
+  const ids = raw.map(Number);
+  if (ids.some(n => !Number.isInteger(n) || n <= 0)) return res.status(400).json({ error: 'Category ids must be positive integers' });
+  if (new Set(ids).size !== ids.length) return res.status(400).json({ error: 'Duplicate category ids' });
+  const current = db.prepare('SELECT id FROM categories ORDER BY sort_order, name').all().map(r => r.id);
+  const existing = new Set(current);
+  if (ids.some(id => !existing.has(id))) return res.status(400).json({ error: 'Unknown category id' });
+  const finalOrder = [...ids, ...current.filter(id => !ids.includes(id))];
+  const upd = db.prepare('UPDATE categories SET sort_order = ? WHERE id = ?');
+  db.transaction(() => { finalOrder.forEach((id, i) => upd.run((i + 1) * 10, id)); })();
+  logActivity(db, req.user.id, 'categories_reorder', `Reordered categories (${finalOrder.length})`);
+  res.json({ ok: true, order: finalOrder });
+});
+
 crudRoutes('categories', 'categories', ['description', 'icon', 'icon_image', 'cover_image', 'banner_image', 'color', 'parent_id', 'sort_order', 'visibility'], {
+  /* A category created without an explicit sort_order appends to the
+     end of the homepage order instead of landing at 0 (the front). */
+  beforeCreate(db, b) {
+    if (b.sort_order === undefined || b.sort_order === null || b.sort_order === '') {
+      const max = db.prepare('SELECT MAX(sort_order) AS m FROM categories').get().m;
+      b.sort_order = (Number.isFinite(max) ? max : 0) + 10;
+    }
+  },
   /* Category access restrictions live in the category_groups join table,
      not columns — handled here alongside the CRUD save. A stray
      restrict_service_ids in a payload is ignored: service restrictions

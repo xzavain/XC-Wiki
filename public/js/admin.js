@@ -553,15 +553,16 @@ const AdminView = {
       <div style="display:flex;justify-content:space-between;align-items:center"><h2 style="margin:0">${title}</h2>
       <button class="btn small" id="tx-new">＋ New</button></div>
       ${isCat ? '<p style="color:var(--muted);font-size:.85rem">A <strong>staff-only</strong> category (and everything in it) is hidden from all readers.</p>' : ''}
+      ${isCat ? '<p style="color:var(--muted);font-size:.85rem">The order below is the order categories appear on the homepage. Drag the ⠿ handle on a row, or use its ↑ ↓ buttons, to change it — changes save immediately.</p>' : ''}
       ${isCat ? '' : '<p style="color:var(--muted);font-size:.85rem">A service can be mapped to a customer group: everyone who holds the service is automatically added to that group (adding never removes anyone).</p>'}
       <div style="overflow-x:auto;margin-top:12px"><table class="tbl"><thead><tr><th></th><th>Name</th><th>Slug</th><th>Description</th>${isCat ? '<th>Visibility</th>' : '<th>Auto-adds group</th>'}<th>Order</th><th></th></tr></thead>
       <tbody>${rows.map(r => `
-        <tr><td>${isCat && (r.cover_image || r.icon_image) ? `<img src="${esc(r.cover_image || r.icon_image)}" style="width:52px;height:32px;object-fit:cover;border-radius:6px;vertical-align:middle">` : `<span style="background:${esc(normalizeColorJs(r.color))}22;border-radius:8px;padding:4px 8px">${esc(r.icon)}</span>`}</td>
+        <tr${isCat ? ` data-cat-row="${r.id}"` : ''}><td>${isCat ? `<span class="tx-drag" data-drag="${r.id}" title="Drag to reorder" aria-label="Drag to reorder">⠿</span> ` : ''}${isCat && (r.cover_image || r.icon_image) ? `<img src="${esc(r.cover_image || r.icon_image)}" style="width:52px;height:32px;object-fit:cover;border-radius:6px;vertical-align:middle">` : `<span style="background:${esc(normalizeColorJs(r.color))}22;border-radius:8px;padding:4px 8px">${esc(r.icon)}</span>`}</td>
         <td><strong>${esc(r.name)}</strong>${isCat ? `<br><small style="color:var(--muted2)">${esc(restrictionText(r))}</small>` : ''}</td><td style="color:var(--muted2)">/${esc(r.slug)}</td>
         <td style="color:var(--muted)">${esc(r.description || '')}</td>
         ${isCat ? `<td>${this.visPill(r.visibility === 'staff' ? 'staff' : 'all')}</td>` : `<td>${r.group_id ? esc((this.groups.find(g => g.id === r.group_id) || {}).name || '—') : '<span style="color:var(--muted2)">—</span>'}</td>`}
         <td>${r.sort_order}</td>
-        <td style="white-space:nowrap"><button class="link-btn" data-edit="${r.id}">Edit</button> · <button class="link-btn" data-del="${r.id}" style="color:var(--red)">Delete</button></td></tr>`).join('')}
+        <td style="white-space:nowrap">${isCat ? `<button class="link-btn" data-move-up="${r.id}" title="Move up" aria-label="Move up">↑</button> <button class="link-btn" data-move-down="${r.id}" title="Move down" aria-label="Move down">↓</button> · ` : ''}<button class="link-btn" data-edit="${r.id}">Edit</button> · <button class="link-btn" data-del="${r.id}" style="color:var(--red)">Delete</button></td></tr>`).join('')}
       </tbody></table></div>
       <div id="tx-form"></div>`;
 
@@ -576,7 +577,7 @@ const AdminView = {
         <div class="form-row3">
           <label class="fld"><span>Icon (emoji)</span><input id="tx-icon" value="${esc(r?.icon || '📄')}" maxlength="8"></label>
           <label class="fld"><span>Color (hex)</span>${colorFieldHtml('tx-color', r?.color || '#3B82F6')}</label>
-          <label class="fld"><span>Sort order</span><input id="tx-order" type="number" value="${r?.sort_order ?? 0}"></label>
+          <label class="fld"><span>Sort order</span><input id="tx-order" type="number" value="${isCat && !r ? '' : (r?.sort_order ?? 0)}"${isCat && !r ? ' placeholder="End (auto)"' : ''}></label>
         </div>
         ${isCat ? '' : `
         <label class="fld"><span>Auto-add holders to group <small style="color:var(--muted)">(customers with this service join the group automatically — never removed)</small></span>
@@ -680,7 +681,12 @@ const AdminView = {
           description: document.getElementById('tx-desc').value,
           icon: document.getElementById('tx-icon').value,
           color: colorFieldValue('tx-color'),
-          sort_order: Number(document.getElementById('tx-order').value) || 0,
+          /* A NEW category with the field left blank sends '' so the
+             server appends it at the end of the order; a typed number
+             is always respected. */
+          sort_order: isCat && !r && document.getElementById('tx-order').value.trim() === ''
+            ? ''
+            : Number(document.getElementById('tx-order').value) || 0,
         };
         if (!isCat) {
           const gv = document.getElementById('tx-group').value;
@@ -709,6 +715,70 @@ const AdminView = {
       await api(`/api/admin/${kind}/${b.dataset.del}`, { method: 'DELETE' });
       toast('Deleted', 'ok'); await this.loadTax(); this.taxManager(main, kind);
     });
+    /* Category reorder (v1.2.3): ↑ ↓ buttons (the reliable path on
+       touch devices) and handle-armed drag-and-drop. Any change saves
+       the full order immediately through the order endpoint, then the
+       table re-renders from the server's canonical order. */
+    if (isCat) {
+      const saveOrder = async (ids) => {
+        try {
+          await api('/api/admin/categories/order', { method: 'PUT', body: JSON.stringify({ ids }) });
+          toast('Order saved', 'ok');
+        } catch (e) { toast(e.message, 'err'); }
+        await this.loadTax(); this.taxManager(main, kind);
+      };
+      const move = (id, dir) => {
+        const i = rows.findIndex(r => String(r.id) === String(id));
+        const j = i + dir;
+        if (i < 0 || j < 0 || j >= rows.length) return;
+        const ids = rows.map(r => r.id);
+        [ids[i], ids[j]] = [ids[j], ids[i]];
+        saveOrder(ids);
+      };
+      main.querySelectorAll('[data-move-up]').forEach(b => b.onclick = () => move(b.dataset.moveUp, -1));
+      main.querySelectorAll('[data-move-down]').forEach(b => b.onclick = () => move(b.dataset.moveDown, 1));
+      let dragId = null;
+      main.querySelectorAll('[data-drag]').forEach(h => {
+        const tr = h.closest('tr');
+        if (!tr) return;
+        h.addEventListener('mousedown', () => { tr.draggable = true; });
+        h.addEventListener('touchstart', () => { tr.draggable = true; }, { passive: true });
+      });
+      main.querySelectorAll('tr[data-cat-row]').forEach(tr => {
+        tr.addEventListener('dragstart', (e) => {
+          dragId = tr.dataset.catRow;
+          tr.classList.add('tx-dragging');
+          try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', dragId); } catch { /* older browser */ }
+        });
+        tr.addEventListener('dragend', () => {
+          tr.draggable = false; dragId = null;
+          tr.classList.remove('tx-dragging');
+          main.querySelectorAll('.tx-drop-above, .tx-drop-below').forEach(x => x.classList.remove('tx-drop-above', 'tx-drop-below'));
+        });
+        tr.addEventListener('dragover', (e) => {
+          if (dragId == null || tr.dataset.catRow === dragId) return;
+          e.preventDefault();
+          const rect = tr.getBoundingClientRect();
+          const below = (e.clientY - rect.top) > rect.height / 2;
+          tr.classList.toggle('tx-drop-below', below);
+          tr.classList.toggle('tx-drop-above', !below);
+          tr.dataset.dropBelow = below ? '1' : '';
+        });
+        tr.addEventListener('dragleave', () => tr.classList.remove('tx-drop-above', 'tx-drop-below'));
+        tr.addEventListener('drop', (e) => {
+          e.preventDefault();
+          if (dragId == null || tr.dataset.catRow === dragId) return;
+          const below = tr.dataset.dropBelow === '1';
+          const ids = rows.map(r => r.id);
+          const from = ids.findIndex(id => String(id) === String(dragId));
+          const [moved] = ids.splice(from, 1);
+          let to = ids.findIndex(id => String(id) === String(tr.dataset.catRow));
+          if (below) to += 1;
+          ids.splice(to, 0, moved);
+          saveOrder(ids);
+        });
+      });
+    }
     // Front-end "Edit this category" hand-off: a staff shortcut on the public
     // site (or the grouped Articles view) stashes the category id and lands
     // here. Consume it exactly once so plain visits never reopen the editor.

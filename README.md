@@ -4,6 +4,10 @@ A knowledge base / wiki website system: a public reader portal (search, categori
 
 Stack: **Node 22 + Express + better-sqlite3**, vanilla JS SPA. No build step — clone, `npm install`, `npm start`.
 
+## What's new in 1.2.3
+
+- **Reorder the homepage categories** — Admin → Categories now shows the categories in homepage order, and staff can change that order right there: drag a row by its ⠿ handle, or use the ↑ ↓ buttons on a row (the reliable way on a tablet). Changes save immediately and the homepage, category listings, and article groups all follow the same stored order. Staff signed in on the homepage can also drag category cards by their handle. New categories are added at the end of the order automatically (a sort-order number can still be typed to place one exactly), and existing sites keep the exact order they show today — the stored values are simply made unambiguous on first boot.
+
 ## What's new in 1.2.2
 
 - **Homepage covers load fast** — category cover and page banner uploads are now stored at web size: a large photo uploaded as a cover is kept at most 1600 × 900 (banners at most 2560 wide) and re-saved as a quality JPEG, instead of the full-size original being stored and sent to every visitor. Smaller images and all other uploads (article images, branding, attachments) are stored exactly as uploaded, and if an image can't be processed the original is kept — an upload never fails over sizing. Media files are also cached by browsers for 30 days now (each upload gets a fresh address, so updates still show immediately).

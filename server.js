@@ -121,6 +121,56 @@ function insertAttachment(db, file, userId, articleId) {
   return { id, url: `/media/${file.filename}`, name: file.originalname, kind: kindForFile(file.mimetype, file.originalname) };
 }
 
+/* Category cover/banner images display in small slots (homepage cards
+   ~350×110, category-page banners ~1100×160) but were stored and served
+   byte-identical at whatever size was uploaded — a set of full-size
+   phone-resolution PNGs made the homepage trickle in. When the admin
+   category form marks an upload with a `purpose` field, the stored copy
+   is downscaled to a web size and re-encoded as JPEG (~85) if — and only
+   if — it is a large PNG/JPEG raster. Anything else (small images, other
+   formats, other upload paths entirely) is stored untouched, and any
+   processing failure falls back to the original file so an upload never
+   fails because of the downscale. */
+const CATEGORY_IMAGE_CAPS = {
+  category_cover: { maxW: 1600, maxH: 900 },
+  category_banner: { maxW: 2560, maxH: Infinity },
+};
+let jimpLib = undefined; // lazy: a broken image lib must never break boot
+function loadJimp() {
+  if (jimpLib === undefined) {
+    try { jimpLib = require('jimp'); } catch { jimpLib = null; }
+  }
+  return jimpLib;
+}
+
+async function downscaleCategoryImage(file, purpose) {
+  const caps = CATEGORY_IMAGE_CAPS[String(purpose || '')];
+  if (!caps || !file || !file.path) return file;
+  if (!/^image\/(png|jpe?g)$/.test(file.mimetype || '')) return file;
+  const lib = loadJimp();
+  if (!lib || !lib.Jimp) return file;
+  try {
+    const img = await lib.Jimp.read(file.path);
+    const { width, height } = img.bitmap;
+    if (!(width > 0 && height > 0)) return file;
+    const scale = Math.min(caps.maxW / width, caps.maxH / height);
+    if (!(scale < 1)) return file; // already within the caps — keep the original bytes
+    img.resize({ w: Math.max(1, Math.round(width * scale)), h: Math.max(1, Math.round(height * scale)) });
+    const buf = await img.getBuffer('image/jpeg', { quality: 85 });
+    const newName = file.filename.replace(/\.[a-z0-9]+$/i, '.jpg');
+    const newPath = path.join(UPLOAD_DIR, newName);
+    fs.writeFileSync(newPath, buf);
+    if (newPath !== file.path) { try { fs.unlinkSync(file.path); } catch {} }
+    file.filename = newName;
+    file.path = newPath;
+    file.mimetype = 'image/jpeg';
+    file.size = buf.length;
+    return file;
+  } catch {
+    return file; // unsupported/corrupt content — store the original untouched
+  }
+}
+
 app.get('/media/:name', (req, res) => {
   const name = String(req.params.name || '');
   if (!STORED_NAME_RE.test(name)) return res.status(404).json({ error: 'Not found' });
@@ -144,7 +194,11 @@ app.get('/media/:name', (req, res) => {
     'Content-Type': row.mime_type || 'application/octet-stream',
     'X-Content-Type-Options': 'nosniff',
     'Content-Disposition': 'inline',
-    'Cache-Control': 'public, max-age=86400',
+    /* Stored names are random per upload and change whenever a file is
+       replaced, so a stored file's bytes never change under its name —
+       safe to cache for 30 days as immutable. Private: media is
+       auth-gated, so shared caches must not store it. */
+    'Cache-Control': 'private, max-age=2592000, immutable',
   });
   res.sendFile(filePath);
 });
@@ -1714,10 +1768,11 @@ app.post('/api/admin/customers/import', requireAuth, async (req, res) => {
 /* ---- Attachments / media library ---- */
 
 app.post('/api/admin/upload', requireAuth, (req, res) => {
-  upload.single('file')(req, res, (err) => {
+  upload.single('file')(req, res, async (err) => {
     if (err) return res.status(400).json({ error: uploadErrorText(err) });
     if (!req.file) return res.status(400).json({ error: 'No file received' });
     const db = getDb();
+    await downscaleCategoryImage(req.file, req.body && req.body.purpose);
     const out = insertAttachment(db, req.file, req.user.id, req.body.article_id || null);
     logActivity(db, req.user.id, 'upload', `Uploaded ${req.file.originalname}`);
     res.json(out);
@@ -1725,10 +1780,12 @@ app.post('/api/admin/upload', requireAuth, (req, res) => {
 });
 
 app.post('/api/admin/upload-multi', requireAuth, (req, res) => {
-  upload.array('files', 40)(req, res, (err) => {
+  upload.array('files', 40)(req, res, async (err) => {
     if (err) return res.status(400).json({ error: uploadErrorText(err) });
     if (!req.files || !req.files.length) return res.status(400).json({ error: 'No files received' });
     const db = getDb();
+    const purpose = req.body && req.body.purpose;
+    for (const f of req.files) await downscaleCategoryImage(f, purpose);
     const out = req.files.map(f => insertAttachment(db, f, req.user.id, req.body.article_id || null));
     logActivity(db, req.user.id, 'upload', `Uploaded ${req.files.length} file(s)`);
     res.json({ files: out });

@@ -295,7 +295,7 @@ const AdminView = {
 
   /* ---------- media helpers & picker (editor + library) ---------- */
 
-  async uploadFiles(fileList, articleId) {
+  async uploadFiles(fileList, articleId, purpose) {
     /* Pre-flight checks so a doomed upload fails instantly with a clear,
        human message instead of a round-trip and a cryptic server error.
        The server enforces the same rules with the same wording. HEIC (the
@@ -312,6 +312,10 @@ const AdminView = {
     const fd = new FormData();
     for (const f of fileList) fd.append('files', f);
     if (articleId) fd.append('article_id', articleId);
+    /* Category cover/banner uploads carry a purpose marker so the server
+       stores a web-sized copy (those images display in small slots);
+       every other upload is stored untouched. */
+    if (purpose) fd.append('purpose', purpose);
     const res = await fetch('/api/admin/upload-multi', { method: 'POST', headers: { 'Authorization': 'Bearer ' + App.token }, body: fd });
     const d = await res.json();
     if (!res.ok) throw new Error(d.error || 'Upload failed');
@@ -632,7 +636,7 @@ const AdminView = {
           if (!f) return;
           setCoverMsg(`Uploading ${f.name}…`, 'var(--muted)');
           try {
-            const [up] = await this.uploadFiles([f]);
+            const [up] = await this.uploadFiles([f], null, 'category_cover');
             setCover(up.url);
             setCoverMsg(`✓ Uploaded ${f.name}`, 'var(--green)');
             toast('Cover uploaded', 'ok');
@@ -659,7 +663,7 @@ const AdminView = {
           if (!f) return;
           setBannerMsg(`Uploading ${f.name}…`, 'var(--muted)');
           try {
-            const [up] = await this.uploadFiles([f]);
+            const [up] = await this.uploadFiles([f], null, 'category_banner');
             setBanner(up.url);
             setBannerMsg(`✓ Uploaded ${f.name}`, 'var(--green)');
             toast('Banner uploaded', 'ok');

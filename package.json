@@ -3,13 +3,14 @@
     "archiver": "^8.0.0",
     "better-sqlite3": "^13.0.0",
     "express": "^4.21.2",
+    "jimp": "^1.6.1",
     "marked": "^15.0.0",
     "multer": "^2.4.0",
     "nodemailer": "^6.10.1",
     "sanitize-html": "^2.13.0",
     "unzipper": "^0.12.5"
   },
-  "description": "XC Wiki \u2014 knowledge base / wiki website system with reader portal, WYSIWYG HTML articles, revision history, customer groups with per-group visibility, cloud backup, and staff admin dashboard",
+  "description": "XC Wiki — knowledge base / wiki website system with reader portal, WYSIWYG HTML articles, revision history, customer groups with per-group visibility, cloud backup, and staff admin dashboard",
   "engines": {
     "node": ">=22"
   },
@@ -20,5 +21,5 @@
     "start": "node server.js"
   },
   "type": "commonjs",
-  "version": "1.2.1"
+  "version": "1.2.2"
 }

@@ -4,6 +4,10 @@ A knowledge base / wiki website system: a public reader portal (search, categori
 
 Stack: **Node 22 + Express + better-sqlite3**, vanilla JS SPA. No build step — clone, `npm install`, `npm start`.
 
+## What's new in 1.2.2
+
+- **Homepage covers load fast** — category cover and page banner uploads are now stored at web size: a large photo uploaded as a cover is kept at most 1600 × 900 (banners at most 2560 wide) and re-saved as a quality JPEG, instead of the full-size original being stored and sent to every visitor. Smaller images and all other uploads (article images, branding, attachments) are stored exactly as uploaded, and if an image can't be processed the original is kept — an upload never fails over sizing. Media files are also cached by browsers for 30 days now (each upload gets a fresh address, so updates still show immediately).
+
 ## What's new in 1.2.1
 
 - **Dark mode is now the site default — and the admin decides** — a new **Theme mode** control in Admin → Site & Branding: **Dark only** (the default: every visitor, admin included, sees the dark theme and the visitor theme toggle is hidden), **Light only** (the same, in light), or **Match visitor's device** (the theme toggle returns and each visitor's device preference rules, with the Default theme seeding a first visit). Existing sites pick up Dark only automatically — no setup needed — and a theme a visitor previously chose on their device no longer overrides a forced mode.

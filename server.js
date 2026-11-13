@@ -1092,7 +1092,7 @@ function setCategoryRestrictions(db, categoryId, table, col, ids, validTable) {
   return wanted;
 }
 
-crudRoutes('categories', 'categories', ['description', 'icon', 'icon_image', 'cover_image', 'color', 'parent_id', 'sort_order', 'visibility'], {
+crudRoutes('categories', 'categories', ['description', 'icon', 'icon_image', 'cover_image', 'banner_image', 'color', 'parent_id', 'sort_order', 'visibility'], {
   /* Category access restrictions live in the category_groups join table,
      not columns — handled here alongside the CRUD save. A stray
      restrict_service_ids in a payload is ignored: service restrictions

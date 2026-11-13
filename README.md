@@ -4,6 +4,10 @@ A knowledge base / wiki website system: a public reader portal (search, categori
 
 Stack: **Node 22 + Express + better-sqlite3**, vanilla JS SPA. No build step — clone, `npm install`, `npm start`.
 
+## What's new in 1.2.0
+
+- **Categories have a separate page banner** — a category can now carry two different images: the **cover image** (homepage cards and listings, unchanged) and a new **page banner** shown as the wide banner at the top of the category page itself. Set it in Admin → Categories with the same upload / library / clear controls as the cover. Leave the page banner empty and the category page keeps using the cover image, exactly as before — existing categories need no changes.
+
 ## What's new in 1.1.5
 
 - **"Your Services" is now a personal, display-only list** — the homepage cards no longer click through to service article lists (no links, no arrows); they simply show the signed-in viewer the services attached to their account, with icon, name and description. The "View All My Services" link next to the section is gone (the All Services page itself still exists in the site navigation, unchanged).

@@ -567,13 +567,17 @@ async function viewTaxonomyDetail(kind, slug) {
   const single = kind === 'category' ? 'categories' : kind === 'service' ? 'services' : 'tags';
   const d = await api(`/api/${single}/${encodeURIComponent(slug)}`);
   const obj = d[kind];
-  const hasCover = kind === 'category' && obj.cover_image;
+  /* Category page banner: the dedicated page banner when one is set, else
+     the cover image (the cover is what homepage cards/listings use). With
+     neither set the header falls back to the icon/emoji tile below. */
+  const bannerImage = kind === 'category' ? (obj.banner_image || obj.cover_image || '') : '';
+  const hasCover = !!bannerImage;
   const headIcon = hasCover ? ''
     : kind === 'category' && obj.icon_image
       ? `<img src="${esc(obj.icon_image)}" alt="" style="width:30px;height:30px;object-fit:cover;border-radius:8px;vertical-align:-6px">`
       : esc(obj.icon || '');
   app.innerHTML = `<div class="crumbs"><a href="/">Home</a> › <a href="/${single}">${single[0].toUpperCase() + single.slice(1)}</a> › ${esc(obj.name)}</div>
-    ${hasCover ? `<img class="cat-banner" src="${esc(obj.cover_image)}" alt="">` : ''}
+    ${hasCover ? `<img class="cat-banner" src="${esc(bannerImage)}" alt="">` : ''}
     <h1 style="margin-top:6px">${headIcon} ${esc(obj.name)}${kind === 'category' && canStaffEdit() ? `<a class="staff-edit staff-edit-head" href="/admin/categories" data-edit-cat="${obj.id}" style="margin-left:12px">✏️ Edit this category</a>` : ''}</h1>
     ${obj.description ? `<p style="color:var(--muted)">${esc(obj.description)}</p>` : ''}
     <div class="art-list" style="margin-top:14px">${d.articles.map(artRow).join('') || '<div class="empty">No articles yet.</div>'}</div>`;

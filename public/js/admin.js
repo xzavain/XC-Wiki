@@ -578,7 +578,7 @@ const AdminView = {
         <label class="fld"><span>Auto-add holders to group <small style="color:var(--muted)">(customers with this service join the group automatically — never removed)</small></span>
           <select id="tx-group"><option value="">— none —</option>${this.groups.map(g => `<option value="${g.id}" ${r?.group_id === g.id ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}</select></label>`}
         ${isCat ? `
-        <div class="fld"><span>Cover image <small style="color:var(--muted)">(BookStack-style book cover — becomes the category's lead visual on cards and listings; the emoji icon is only a fallback when no cover is set)</small></span>
+        <div class="fld"><span>Cover image — homepage card <small style="color:var(--muted)">(BookStack-style book cover — the category's image on homepage cards and listings; also shown at the top of the category page when no page banner is set. The emoji icon is only a fallback when no cover is set)</small></span>
           <span style="display:flex;gap:8px;align-items:center">
             <input id="tx-coverimg" value="${esc(r?.cover_image || r?.icon_image || '')}" placeholder="/media/…" style="flex:1">
             <span id="tx-coverprev">${(r?.cover_image || r?.icon_image) ? `<img src="${esc(r.cover_image || r.icon_image)}" style="width:52px;height:32px;object-fit:cover;border-radius:6px">` : ''}</span>
@@ -587,6 +587,16 @@ const AdminView = {
             <button class="btn ghost small" type="button" id="tx-coverclear">Clear</button>
           </span>
           <div id="tx-covermsg" role="status" style="font-size:.8rem;margin-top:6px;min-height:1.05em"></div>
+        </div>
+        <div class="fld"><span>Page banner — category page top <small style="color:var(--muted)">(wide banner shown at the top of the category page itself, separate from the homepage card image; leave empty to use the cover image there)</small></span>
+          <span style="display:flex;gap:8px;align-items:center">
+            <input id="tx-bannerimg" value="${esc(r?.banner_image || '')}" placeholder="/media/…" style="flex:1">
+            <span id="tx-bannerprev">${r?.banner_image ? `<img src="${esc(r.banner_image)}" style="width:52px;height:32px;object-fit:cover;border-radius:6px">` : ''}</span>
+            <label class="btn ghost small" style="cursor:pointer">Upload<input type="file" id="tx-bannerfile" accept="image/*" style="display:none"></label>
+            <button class="btn ghost small" type="button" id="tx-bannerpick">Library…</button>
+            <button class="btn ghost small" type="button" id="tx-bannerclear">Clear</button>
+          </span>
+          <div id="tx-bannermsg" role="status" style="font-size:.8rem;margin-top:6px;min-height:1.05em"></div>
         </div>` : ''}
         ${isCat ? `
         <div class="form-row3">
@@ -631,6 +641,33 @@ const AdminView = {
             toast(err.message, 'err');
           }
         };
+        const bannerInput = document.getElementById('tx-bannerimg');
+        const bannerPrev = document.getElementById('tx-bannerprev');
+        const bannerMsg = document.getElementById('tx-bannermsg');
+        /* Same upload behavior as the cover field above: persistent
+           inline status, library picker, clear, same-file retry. */
+        const setBannerMsg = (text, color) => { if (bannerMsg) { bannerMsg.textContent = text || ''; bannerMsg.style.color = color || ''; } };
+        const setBanner = (url) => { bannerInput.value = url || ''; bannerPrev.innerHTML = url ? `<img src="${esc(url)}" style="width:52px;height:32px;object-fit:cover;border-radius:6px">` : ''; setBannerMsg(''); };
+        bannerInput.addEventListener('input', () => setBanner(bannerInput.value));
+        document.getElementById('tx-bannerclear').onclick = () => setBanner('');
+        document.getElementById('tx-bannerpick').onclick = () => this.openMediaPicker({ kind: 'image', title: 'Choose category page banner', cb: (f) => setBanner(f.url) });
+        document.getElementById('tx-bannerfile').onchange = async (e) => {
+          const f = e.target.files[0];
+          /* Clear the input so picking the SAME file again later fires
+             'change' again — same retry fix as the cover field. */
+          e.target.value = '';
+          if (!f) return;
+          setBannerMsg(`Uploading ${f.name}…`, 'var(--muted)');
+          try {
+            const [up] = await this.uploadFiles([f]);
+            setBanner(up.url);
+            setBannerMsg(`✓ Uploaded ${f.name}`, 'var(--green)');
+            toast('Banner uploaded', 'ok');
+          } catch (err) {
+            setBannerMsg('⚠ ' + err.message, 'var(--red)');
+            toast(err.message, 'err');
+          }
+        };
       }
       document.getElementById('tx-save').onclick = async () => {
         const payload = {
@@ -647,6 +684,7 @@ const AdminView = {
         }
         if (isCat) {
           payload.cover_image = document.getElementById('tx-coverimg').value.trim();
+          payload.banner_image = document.getElementById('tx-bannerimg').value.trim();
           payload.icon_image = '';
           const p = document.getElementById('tx-parent');
           payload.parent_id = p && p.value ? Number(p.value) : null;

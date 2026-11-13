@@ -78,19 +78,21 @@ p { margin: 0 0 1em; }
   font-weight: 800; font-size: .8rem; color: var(--text); background: transparent;
   position: relative; isolation: isolate;
 }
-/* Logo glow (v1.2.5): there is NO tile — nothing paints a rectangle behind
-   the logo (no background, border, or box-shadow on the wrapper). The glow
-   is a single oversized, UNCLIPPED layer centered on the mark: an ambient
-   elliptical pool of the branding green (the primary color) whose falloff
-   is powered to true zero at 70% of its extent — and that extent is far
-   larger than the logo — so it reads as light pooled in the header with
-   no boundary at any logo size. (A clipped or masked glow layer leaves a
-   straight seam where the layer ends; this one is never clipped.) Only
-   the glow fades; the logo image itself stays at full opacity. */
+/* Logo glow (v1.2.5; tightened v1.2.5.1): there is NO tile — nothing
+   paints a rectangle behind the logo (no background, border, or
+   box-shadow on the wrapper). The glow is a single UNCLIPPED layer
+   centered on the mark: an ambient elliptical pool of the branding
+   green (the primary color) whose falloff reaches true zero at 62% of
+   its extent. v1.2.5's layer (380% x 210%, zero at 70%) spread over
+   the site title/tagline and into the nav; v1.2.5.1 hugs the mark
+   (240% x 150%, softer stops) so the light stays on the logo. (A
+   clipped or masked glow layer leaves a straight seam where the layer
+   ends; this one is never clipped.) Only the glow fades; the logo
+   image itself stays at full opacity. */
 .brand-mark::before {
-  content: ''; position: absolute; left: 50%; top: 50%; width: 380%; height: 210%;
+  content: ''; position: absolute; left: 50%; top: 50%; width: 240%; height: 150%;
   transform: translate(-50%, -50%); z-index: -1; pointer-events: none;
-  background: radial-gradient(ellipse at center, color-mix(in srgb, var(--accent) 45%, transparent) 0%, color-mix(in srgb, var(--accent) 28%, transparent) 28%, color-mix(in srgb, var(--accent) 12%, transparent) 48%, transparent 70%);
+  background: radial-gradient(ellipse at center, color-mix(in srgb, var(--accent) 34%, transparent) 0%, color-mix(in srgb, var(--accent) 18%, transparent) 30%, color-mix(in srgb, var(--accent) 6%, transparent) 48%, transparent 62%);
 }
 .brand-text { display: flex; flex-direction: column; line-height: 1.15; }
 .brand-text strong { font-size: .92rem; }

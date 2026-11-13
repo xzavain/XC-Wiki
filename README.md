@@ -4,6 +4,10 @@ A knowledge base / wiki website system: a public reader portal (search, categori
 
 Stack: **Node 22 + Express + better-sqlite3**, vanilla JS SPA. No build step — clone, `npm install`, `npm start`.
 
+## What's new in 1.2.5.1
+
+- **Header logo glow tightened** — the green glow behind the header logo now hugs the mark instead of spreading across the site title, tagline, and navigation.
+
 ## What's new in 1.2.5
 
 - **Admin → "Users" is now "Staff", grouped like Customers** — the page lists an **Admins** section first, then **Staff** (editors and viewers), each with its own count and the same row actions as before (edit, role, enable/disable, delete, services and groups). Only the labels changed — nothing about accounts, roles, or permissions moved.

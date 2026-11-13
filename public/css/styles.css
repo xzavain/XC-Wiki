@@ -264,6 +264,15 @@ p { margin: 0 0 1em; }
 .md th, .md td { border: 1px solid var(--border); padding: 8px 12px; text-align: left; }
 .md th { background: var(--card2); }
 .md img { max-width: 100%; height: auto !important; border-radius: 8px; }
+
+/* Article image lightbox (v1.2.6): full-size image in an on-page overlay */
+#md-body img, .attach-item img { cursor: zoom-in; }
+.lightbox { position: fixed; inset: 0; z-index: 400; background: rgba(3,5,9,.9); display: none; align-items: center; justify-content: center; padding: 20px; cursor: zoom-out; }
+.lightbox.open { display: flex; }
+.lightbox-stage { position: relative; }
+.lightbox-img { display: block; max-width: 94vw; max-height: 94vh; object-fit: contain; border-radius: 8px; box-shadow: 0 18px 60px rgba(0,0,0,.6); background: var(--bg2); cursor: default; }
+.lightbox-close { position: absolute; top: 8px; right: 8px; width: 36px; height: 36px; border-radius: 50%; border: 1px solid rgba(255,255,255,.25); background: rgba(10,13,20,.78); color: #fff; font-size: 20px; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; }
+.lightbox-close:hover { background: rgba(10,13,20,.96); }
 .md h1[id], .md h2[id], .md h3[id], .md h4[id], .md h5[id], .md h6[id] { scroll-margin-top: 130px; }
 .md ul.task-list { list-style: none; padding-left: 4px; }
 .toc { position: sticky; top: 130px; align-self: start; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; font-size: .82rem; max-height: 70vh; overflow-y: auto; }

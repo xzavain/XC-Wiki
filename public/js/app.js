@@ -968,6 +968,54 @@ async function boot() {
   document.getElementById('nav-toggle').onclick = () => document.getElementById('mainnav').classList.toggle('open');
   document.getElementById('preview-exit').onclick = () => setPreviewMode(false);
 
+  /* Article image lightbox: clicking an image in an article body (or an
+     attachment figure) opens the full-size image in an on-page overlay
+     instead of navigating away to the raw file. Close with the × button at
+     the top-right of the image, by clicking anywhere off the image, or Esc.
+     Registered BEFORE the SPA nav handler below so a lightboxed image link
+     never falls through to native navigation. */
+  const lightbox = document.createElement('div');
+  lightbox.className = 'lightbox';
+  lightbox.setAttribute('role', 'dialog');
+  lightbox.setAttribute('aria-modal', 'true');
+  lightbox.innerHTML = `<div class="lightbox-stage"><img class="lightbox-img" alt=""><button class="lightbox-close" type="button" aria-label="Close image">×</button></div>`;
+  document.body.appendChild(lightbox);
+  const lightboxImg = lightbox.querySelector('.lightbox-img');
+  let lightboxReturnFocus = null;
+  const closeLightbox = () => {
+    lightbox.classList.remove('open');
+    lightboxImg.removeAttribute('src');
+    document.body.style.overflow = '';
+    if (lightboxReturnFocus && lightboxReturnFocus.focus) lightboxReturnFocus.focus();
+    lightboxReturnFocus = null;
+  };
+  const openLightbox = (src, alt) => {
+    lightboxReturnFocus = document.activeElement;
+    lightboxImg.src = src;
+    lightboxImg.alt = alt || '';
+    lightbox.classList.add('open');
+    document.body.style.overflow = 'hidden';
+    lightbox.querySelector('.lightbox-close').focus();
+  };
+  lightbox.addEventListener('click', (e) => { if (e.target !== lightboxImg) closeLightbox(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && lightbox.classList.contains('open')) closeLightbox(); });
+  document.addEventListener('click', (e) => {
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const img = e.target && e.target.closest ? e.target.closest('#md-body img, .attach-item img') : null;
+    if (!img) return;
+    const a = img.closest('a[href]');
+    let full = img.currentSrc || img.src;
+    if (a) {
+      const href = a.getAttribute('href') || '';
+      const looksImage = /\.(png|jpe?g|gif|webp|svg|avif)(\?|#|$)/i.test(href) || href.startsWith('/media/') || href.startsWith('/uploads/');
+      if (!looksImage) return; // a real link wrapped around an image keeps its normal behavior
+      full = a.href;
+    }
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    openLightbox(full, img.alt);
+  });
+
   /* SPA navigation for clean URLs: internal path links are routed through
      pushState instead of full page loads. API links, media files, uploads,
      downloads, new-tab links and in-page #anchors keep native behavior. */

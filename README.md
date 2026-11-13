@@ -4,6 +4,10 @@ A knowledge base / wiki website system: a public reader portal (search, categori
 
 Stack: **Node 22 + Express + better-sqlite3**, vanilla JS SPA. No build step — clone, `npm install`, `npm start`.
 
+## What's new in 1.2.6
+
+- **Article image lightbox** — clicking an image inside an article (or an attachment image) now opens the full-size image in an on-page lightbox popup instead of navigating away to the raw file. Close it with the × at the top-right of the image, by clicking anywhere off the image, or with Esc. Images that link somewhere else keep their normal link behavior.
+
 ## What's new in 1.2.5.1
 
 - **Header logo glow tightened** — the green glow behind the header logo now hugs the mark instead of spreading across the site title, tagline, and navigation.

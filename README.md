@@ -4,6 +4,10 @@ A knowledge base / wiki website system: a public reader portal (search, categori
 
 Stack: **Node 22 + Express + better-sqlite3**, vanilla JS SPA. No build step — clone, `npm install`, `npm start`.
 
+## What's new in 1.2.7
+
+- **"Your Services" is personal again** — the nav's Your Services page no longer shows the whole catalog (it had become a duplicate of All Services when the old homepage section was removed in 1.2.4). It now lists only the services that apply to the signed-in viewer from what the admin set on their account: services attached directly, plus — for customers — every service mapped to a group they belong to. Staff see the services attached to their staff account. Boxes stay display-only, and a viewer with nothing assigned sees a "No services have been assigned to your account yet" note. All Services is unchanged.
+
 ## What's new in 1.2.6
 
 - **Article image lightbox** — clicking an image inside an article (or an attachment image) now opens the full-size image in an on-page lightbox popup instead of navigating away to the raw file. Close it with the × at the top-right of the image, by clicking anywhere off the image, or with Esc. Images that link somewhere else keep their normal link behavior.

@@ -659,6 +659,19 @@ async function viewTaxonomyList(kind) {
   wireStaffEdits(app);
 }
 
+async function viewMyServices() {
+  const app = document.getElementById('app');
+  const d = await api('/api/my-services');
+  app.innerHTML = `<div class="crumbs"><a href="/">Home</a> › Your Services</div>
+    <h1 style="margin-top:6px">Your Services</h1>
+    ${d.length ? `<div class="cat-grid">
+    ${d.map(x => `<div class="cat-card svc-box">
+        <span class="ci" style="background:${esc(x.color || '#3B82F6')}22;color:${esc(x.color || '#3B82F6')}">${esc(x.icon || '🏷️')}</span>
+        <strong>${esc(x.name)}</strong><small>${esc(x.description || '')}</small>
+      </div>`).join('')}
+    </div>` : '<div class="empty">No services have been assigned to your account yet.</div>'}`;
+}
+
 async function viewTaxonomyDetail(kind, slug) {
   const app = document.getElementById('app');
   const single = kind === 'category' ? 'categories' : kind === 'service' ? 'services' : 'tags';
@@ -918,6 +931,7 @@ async function route() {
     else if (parts[0] === 'category' && parts[1]) { setActiveNav(''); await viewTaxonomyDetail('category', decodeURIComponent(parts[1])); }
     else if (parts[0] === 'service' && parts[1]) { setActiveNav(''); await viewTaxonomyDetail('service', decodeURIComponent(parts[1])); }
     else if (parts[0] === 'tag' && parts[1]) { setActiveNav(''); await viewTaxonomyDetail('tag', decodeURIComponent(parts[1])); }
+    else if (parts[0] === 'my-services') { setActiveNav('services'); await viewMyServices(); }
     else if (['categories', 'services', 'tags'].includes(parts[0])) { setActiveNav(parts[0] === 'services' ? 'all-services' : ''); await viewTaxonomyList(parts[0]); }
     else if (parts[0] === 'popular' || parts[0] === 'recent') { setActiveNav(''); await viewArticleListPage(parts[0]); }
     else if (parts[0] === 'search' && parts[1]) { setActiveNav(''); await viewSearchPage(decodeURIComponent(parts.slice(1).join('/'))); }

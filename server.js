@@ -598,6 +598,25 @@ function viewerOwnServices(db, viewer) {
     .all(viewer.id).map(withHexColor);
 }
 
+/** The "Your Services" page list (v1.2.7): the services that apply to
+    the signed-in viewer from what the admin set on their account —
+    services attached directly (customer_services for customers,
+    user_services for staff) PLUS, for customers, every service mapped
+    to a group the customer belongs to (services.group_id). Full
+    catalog-shaped rows in catalog order; never the whole catalog. */
+function viewerPageServices(db, viewer) {
+  if (!viewer || viewer.id == null) return [];
+  if (viewer.type === 'staff') return viewerOwnServices(db, viewer);
+  const groupIds = getCustomerGroupIds(db, viewer.id);
+  const groupBranch = groupIds.length
+    ? ` OR s.group_id IN (${groupIds.map(() => '?').join(',')})`
+    : '';
+  return db.prepare(`SELECT s.* FROM services s
+    WHERE s.id IN (SELECT service_id FROM customer_services WHERE customer_id = ?)${groupBranch}
+    ORDER BY s.sort_order, s.name`)
+    .all(viewer.id, ...groupIds).map(withHexColor);
+}
+
 /** "Recommended for You" on the homepage (v1.2.4). For a viewer WITH
     services attached, recommendations lead with published articles the
     viewer may see (the normal visibility clause — group rules fully
@@ -828,6 +847,12 @@ app.get('/api/categories/:slug', requireSignedIn, (req, res) => {
 
 app.get('/api/services', requireSignedIn, (req, res) => {
   res.json(getDb().prepare('SELECT * FROM services ORDER BY sort_order, name').all().map(withHexColor));
+});
+
+/* v1.2.7: the personal "Your Services" list — only the services that
+   apply to the signed-in viewer from the admin's assignments. */
+app.get('/api/my-services', requireSignedIn, (req, res) => {
+  res.json(viewerPageServices(getDb(), req.viewer));
 });
 
 app.get('/api/services/:slug', requireSignedIn, (req, res) => {
